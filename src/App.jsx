@@ -1,10 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from "firebase/app";
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "firebase/auth";
+
+// 1. Firebase 설정 (본인의 Firebase 대시보드에서 얻은 값을 여기에 넣어주세요)
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_ID",
+  appId: "YOUR_APP_ID"
+};
+
+// 2. Firebase 초기화 (App 컴포넌트 외부에서 1회 실행)
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const provider = new GoogleAuthProvider();
 
 export default function App() {
   // === 상태(State) 관리 ===
   const [currentView, setCurrentView] = useState('feed'); // 'feed', 'login', 'mypage', 'upload'
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState(() => JSON.parse(localStorage.getItem('beporter_user')) || null);
+  const [currentUser, setCurrentUser] = useState(null); // Firebase에서 받아올 유저 정보
   const [feedData, setFeedData] = useState(() => JSON.parse(localStorage.getItem('beporter_feeds')) || []);
   
   // 모달 및 바텀시트 상태
@@ -26,6 +43,18 @@ export default function App() {
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
 
+  // === Firebase 로그인 상태 유지 (useEffect) ===
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setCurrentUser({ id: user.uid, name: user.displayName || '사용자', provider: 'Google' });
+      } else {
+        setCurrentUser(null);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
   // === 토스트 메시지 로직 ===
   const showToast = (msg) => {
     setToastMsg({ show: true, msg });
@@ -42,41 +71,48 @@ export default function App() {
 
   const toggleMenu = () => setIsMenuOpen(!isMenuOpen);
 
-  const checkAuthAndUpload = () => {
+  // 권한 체크 헬퍼 함수
+  const checkAuthAndAction = (actionCallback) => {
     if (!currentUser) {
       showToast("로그인이 필요한 기능입니다.");
       switchView('login');
     } else {
-      switchView('upload');
+      actionCallback();
     }
   };
 
   const goToMyPage = () => {
     setIsMenuOpen(false);
-    if (!currentUser) {
-      showToast("로그인이 필요한 기능입니다.");
-      switchView('login');
-      return;
-    }
-    switchView('mypage');
+    checkAuthAndAction(() => switchView('mypage'));
   };
 
-  // === 로그인 / 로그아웃 제어 ===
-  const processLogin = (provider) => {
-    const mockName = provider === '카카오' ? '김반장(카카오)' : '이프로(구글)';
-    const user = { id: 'user_' + Date.now(), name: mockName, provider: provider };
-    setCurrentUser(user);
-    localStorage.setItem('beporter_user', JSON.stringify(user));
-    showToast(`${provider} 계정으로 로그인 되었습니다.`);
-    switchView('feed');
-  };
-
-  const processLogout = () => {
-    setCurrentUser(null);
-    localStorage.removeItem('beporter_user');
-    showToast('로그아웃 되었습니다.');
+  const handleOpenFeedback = () => {
     setIsMenuOpen(false);
-    switchView('feed');
+    checkAuthAndAction(() => setIsFeedbackModalOpen(true));
+  };
+
+  // === 로그인 / 로그아웃 제어 (Firebase 적용) ===
+  const processLogin = async () => {
+    try {
+      await signInWithPopup(auth, provider);
+      // user state는 onAuthStateChanged(useEffect)에서 자동으로 처리됩니다.
+      showToast(`구글 계정으로 로그인 되었습니다.`);
+      switchView('feed');
+    } catch (error) {
+      console.error(error);
+      showToast("로그인에 실패했습니다.");
+    }
+  };
+
+  const processLogout = async () => {
+    try {
+      await signOut(auth);
+      showToast('로그아웃 되었습니다.');
+      setIsMenuOpen(false);
+      switchView('feed');
+    } catch (error) {
+      showToast("로그아웃에 실패했습니다.");
+    }
   };
 
   // === 사진 업로드 로직 ===
@@ -292,13 +328,13 @@ export default function App() {
           {currentUser ? (
             <>
               <li><button onClick={goToMyPage}>👤 마이페이지 (내 리포트)</button></li>
-              <li><button onClick={() => { setIsMenuOpen(false); setIsFeedbackModalOpen(true); }}>💡 개발자에게 피드백 전송</button></li>
+              <li><button onClick={handleOpenFeedback}>💡 개발자에게 피드백 전송</button></li>
               <li><button onClick={processLogout} style={{ color: '#ef4444' }}>🚪 로그아웃</button></li>
             </>
           ) : (
             <>
               <li><button onClick={() => { setIsMenuOpen(false); switchView('login'); }}>🔐 로그인 / 회원가입</button></li>
-              <li><button onClick={() => { setIsMenuOpen(false); setIsFeedbackModalOpen(true); }}>💡 개발자에게 피드백 전송</button></li>
+              <li><button onClick={handleOpenFeedback}>💡 개발자에게 피드백 전송</button></li>
             </>
           )}
         </ul>
@@ -360,7 +396,7 @@ export default function App() {
           </div>
 
           <div className="fab-container">
-            <button className="fab-btn" onClick={checkAuthAndUpload}>
+            <button className="fab-btn" onClick={() => checkAuthAndAction(() => switchView('upload'))}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="12" y1="5" x2="12" y2="19"></line>
                 <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -391,13 +427,8 @@ export default function App() {
             <h1>비포터 시작하기</h1>
             <p>1분만에 가입하고 신뢰를 공유하세요</p>
 
-            <button className="social-btn btn-kakao" onClick={() => processLogin('카카오')}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 3c-5.52 0-10 3.58-10 8 0 2.85 1.8 5.34 4.5 6.74-.2.7-.6 2.22-.65 2.45-.06.28.1.28.24.18.12-.08 2.74-1.85 3.86-2.61.65.08 1.34.14 2.05.14 5.52 0 10-3.58 10-8s-4.48-8-10-8z"/>
-              </svg>
-              카카오톡으로 시작하기
-            </button>
-            <button className="social-btn btn-google" onClick={() => processLogin('Google')}>
+            {/* 현재 Firebase Authentication을 이용한 구글 로그인만 연동됨 */}
+            <button className="social-btn btn-google" onClick={processLogin}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M22 12c0-.82-.07-1.61-.2-2.38H12v4.5h5.68a5.4 5.4 0 0 1-2.34 3.55v2.95h3.79C21.34 18.57 22 15.55 22 12z"/>
               </svg>
