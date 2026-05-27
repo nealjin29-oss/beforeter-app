@@ -1,35 +1,61 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from "firebase/app";
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "firebase/auth";
+import { 
+  getAuth, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  onAuthStateChanged, 
+  signOut
+} from "firebase/auth";
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  doc, 
+  getDoc, 
+  query, 
+  orderBy, 
+  onSnapshot, 
+  serverTimestamp 
+} from "firebase/firestore";
+import { 
+  getStorage, 
+  ref, 
+  uploadString, 
+  getDownloadURL 
+} from "firebase/storage";
 
-// [필독] Firebase 설정값 (본인의 대시보드 값으로 교체해주세요)
+// 데이터베이스 연동용 실제 Firebase 설정값
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyA_XmIf672lF5y7VyjoK-7FIHdBITgiwnw",
+  authDomain: "beforeter-72de2.firebaseapp.com",
+  projectId: "beforeter-72de2",
+  storageBucket: "beforeter-72de2.firebasestorage.app",
+  messagingSenderId: "849691385148",
+  appId: "1:849691385148:web:35b8a75e16e0b73f351239"
 };
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
+const db = getFirestore(app); // Firestore (텍스트 DB)
+const storage = getStorage(app); // Storage (이미지 파일 저장소)
 
 export default function App() {
   // === 상태(State) 관리 ===
-  const [currentView, setCurrentView] = useState('feed'); 
+  const [currentView, setCurrentView] = useState('feed'); // 'feed', 'login', 'mypage', 'upload', 'detail'
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState(null); 
-  const [feedData, setFeedData] = useState(() => JSON.parse(localStorage.getItem('beporter_feeds')) || []);
+  const [feedData, setFeedData] = useState([]); 
   
   // 모달 및 바텀시트 상태
   const [isPhotoSheetOpen, setIsPhotoSheetOpen] = useState(false);
   const [currentPhotoTarget, setCurrentPhotoTarget] = useState(''); 
   const [isFinishModalOpen, setIsFinishModalOpen] = useState(false);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
-  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false); // 약관 동의 모달
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false); // 프로필 수정 모달
+  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false); 
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false); 
+  const [isUploading, setIsUploading] = useState(false); 
   
   // 폼 및 입력 상태
   const [taskTitle, setTaskTitle] = useState('');
@@ -47,16 +73,20 @@ export default function App() {
   const [editAffiliation, setEditAffiliation] = useState('');
   const [editProfilePic, setEditProfilePic] = useState('');
 
+  // 공유 링크용 최신 리포트 ID 및 상세 보기 데이터 상태
+  const [latestReportId, setLatestReportId] = useState('');
+  const [detailReport, setDetailReport] = useState(null);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
+
   // 숨겨진 파일 인풋 참조
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
-  const profilePicRef = useRef(null); // 프로필 사진용
+  const profilePicRef = useRef(null);
 
-  // === 인증 감시 및 프로필 병합 ===
+  // === 1. 인증 감시 및 로컬 프로필 병합 ===
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
-        // 로컬스토리지에 저장된 추가 프로필 정보(소속, 사진)를 불러와 병합
         const savedProfiles = JSON.parse(localStorage.getItem('beporter_profiles')) || {};
         const userProfile = savedProfiles[user.uid] || {};
         
@@ -74,12 +104,61 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // === 2. Firestore 실시간 피드 데이터 불러오기 ===
+  useEffect(() => {
+    const q = query(collection(db, "reports"), orderBy("createdAt", "desc"));
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const reports = [];
+      querySnapshot.forEach((doc) => {
+        reports.push({ id: doc.id, ...doc.data() });
+      });
+      setFeedData(reports);
+    }, (error) => {
+      console.error("데이터 읽기 오류:", error);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // === 3. 공유 링크 주소 자동 감지 상세페이지 라우팅 시스템 ===
+  useEffect(() => {
+    const checkSharedLink = async () => {
+      const path = window.location.pathname;
+      if (path.includes('/report/')) {
+        const parts = path.split('/report/');
+        const reportId = parts[parts.length - 1];
+        if (reportId) {
+          setCurrentView('detail');
+          setIsDetailLoading(true);
+          try {
+            const docRef = doc(db, "reports", reportId);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+              setDetailReport({ id: docSnap.id, ...docSnap.data() });
+            } else {
+              showToast("존재하지 않거나 삭제된 리포트입니다.");
+              setCurrentView('feed');
+            }
+          } catch (err) {
+            showToast("리포트를 불러오는 중 오류가 발생했습니다.");
+            setCurrentView('feed');
+          } finally {
+            setIsDetailLoading(false);
+          }
+        }
+      }
+    };
+    checkSharedLink();
+  }, []);
+
   const showToast = (msg) => {
     setToastMsg({ show: true, msg });
     setTimeout(() => setToastMsg({ show: false, msg: '' }), 3000);
   };
 
   const switchView = (view) => {
+    if (view === 'feed' && window.location.pathname.includes('/report/')) {
+      window.history.pushState({}, '', '/');
+    }
     setCurrentView(view);
     window.scrollTo(0, 0);
   };
@@ -95,7 +174,6 @@ export default function App() {
     }
   };
 
-  // 오류 수정을 위해 누락되었던 함수들 추가
   const goToMyPage = () => {
     setIsMenuOpen(false);
     checkAuthAndAction(() => switchView('mypage'));
@@ -106,7 +184,7 @@ export default function App() {
     checkAuthAndAction(() => setIsFeedbackModalOpen(true));
   };
 
-  // === 로그인 & 약관 동의 ===
+  // === 구글 로그인 & 약관 동의 ===
   const handleLoginClick = () => {
     setTermsAgreed(false);
     setPrivacyAgreed(false);
@@ -124,7 +202,6 @@ export default function App() {
       showToast("필수 약관에 모두 동의해주세요.");
       return;
     }
-    
     try {
       setIsTermsModalOpen(false);
       await signInWithPopup(auth, provider);
@@ -154,12 +231,40 @@ export default function App() {
     setIsProfileModalOpen(true);
   };
 
+  // 💡 [핵심 최적화] 이미지 모바일 용량 초과 방지 JPEG 60% 압축 함수
+  const resizeAndCompressImage = (file, callback, maxWidth = 800) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height *= maxWidth / width;
+          width = maxWidth;
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // JPEG 형식으로 60% 품질로 대폭 압축하여 리턴 (속도 최적화 및 용량 제한 회피)
+        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.6);
+        callback(compressedBase64);
+      };
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleProfilePicSelect = (e) => {
     const file = e.target.files[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => setEditProfilePic(event.target.result);
-      reader.readAsDataURL(file);
+      resizeAndCompressImage(file, (compressedStr) => {
+        setEditProfilePic(compressedStr);
+      }, 200); 
     }
     e.target.value = '';
   };
@@ -169,7 +274,6 @@ export default function App() {
       showToast("이름을 입력해주세요.");
       return;
     }
-    
     const updatedUser = {
       ...currentUser,
       name: editName,
@@ -177,21 +281,9 @@ export default function App() {
       profilePic: editProfilePic
     };
 
-    // 로컬스토리지에 커스텀 프로필 저장 (DB 연동 전까지)
     const savedProfiles = JSON.parse(localStorage.getItem('beporter_profiles')) || {};
-    savedProfiles[currentUser.id] = {
-      name: editName,
-      affiliation: editAffiliation,
-      profilePic: editProfilePic
-    };
+    savedProfiles[currentUser.id] = { name: editName, affiliation: editAffiliation, profilePic: editProfilePic };
     localStorage.setItem('beporter_profiles', JSON.stringify(savedProfiles));
-
-    // 기존 작성한 피드들의 작성자 이름도 일괄 업데이트
-    const updatedFeeds = feedData.map(feed => 
-      feed.authorId === currentUser.id ? { ...feed, authorName: editName, authorAffiliation: editAffiliation, authorPic: editProfilePic } : feed
-    );
-    setFeedData(updatedFeeds);
-    localStorage.setItem('beporter_feeds', JSON.stringify(updatedFeeds));
 
     setCurrentUser(updatedUser);
     setIsProfileModalOpen(false);
@@ -213,41 +305,54 @@ export default function App() {
   const handleFileSelect = (e) => {
     const file = e.target.files[0];
     if (file && currentPhotoTarget) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (currentPhotoTarget === 'before') setBeforeImg(event.target.result);
-        if (currentPhotoTarget === 'after') setAfterImg(event.target.result);
-      };
-      reader.readAsDataURL(file);
+      resizeAndCompressImage(file, (compressedStr) => {
+        if (currentPhotoTarget === 'before') setBeforeImg(compressedStr);
+        if (currentPhotoTarget === 'after') setAfterImg(compressedStr);
+      }, 800);
     }
     e.target.value = ''; 
   };
 
-  const saveAndShareReport = () => {
+  // 🚀 Firebase Storage 이미지 업로드 및 Firestore 데이터 저장 로직 🚀
+  const saveAndShareReport = async () => {
     if (!taskTitle || !beforeImg || !afterImg) {
       showToast("제목과 사진(전/후)을 모두 입력해주세요!");
       return;
     }
 
-    const newReport = {
-      id: 'report_' + Date.now(),
-      authorId: currentUser.id,
-      authorName: currentUser.name,
-      authorAffiliation: currentUser.affiliation,
-      authorPic: currentUser.profilePic,
-      time: "방금 전",
-      title: taskTitle,
-      beforeImg: beforeImg,
-      afterImg: afterImg
-    };
+    setIsUploading(true);
+    showToast("사진을 클라우드에 안전하게 저장 중입니다...");
 
     try {
-      const updatedFeeds = [newReport, ...feedData];
-      setFeedData(updatedFeeds);
-      localStorage.setItem('beporter_feeds', JSON.stringify(updatedFeeds));
+      const timeStamp = Date.now();
+      
+      const beforeStorageRef = ref(storage, `reports/${currentUser.id}/${timeStamp}_before.jpg`);
+      const afterStorageRef = ref(storage, `reports/${currentUser.id}/${timeStamp}_after.jpg`);
+
+      await uploadString(beforeStorageRef, beforeImg, 'data_url');
+      const beforeDownloadUrl = await getDownloadURL(beforeStorageRef);
+
+      await uploadString(afterStorageRef, afterImg, 'data_url');
+      const afterDownloadUrl = await getDownloadURL(afterStorageRef);
+
+      const docRef = await addDoc(collection(db, "reports"), {
+        authorId: currentUser.id,
+        authorName: currentUser.name || '작업자',
+        authorAffiliation: currentUser.affiliation || '',
+        authorPic: currentUser.profilePic || '',
+        title: taskTitle,
+        beforeImg: beforeDownloadUrl, 
+        afterImg: afterDownloadUrl,   
+        createdAt: serverTimestamp()
+      });
+
+      setLatestReportId(docRef.id); 
       setIsFinishModalOpen(true);
     } catch (error) {
-      showToast("용량이 초과되었습니다.");
+      console.error(error);
+      showToast("클라우드 업로드 중 오류가 발생했습니다.");
+    } finally {
+      setIsUploading(false); 
     }
   };
 
@@ -260,17 +365,17 @@ export default function App() {
   };
 
   const copyAndFinish = () => {
-    const dummyLink = "https://www.beforeter.com/report/" + Math.floor(Math.random() * 10000);
+    const realLink = `https://www.beforeter.com/report/${latestReportId}`;
     const textarea = document.createElement('textarea');
-    textarea.value = dummyLink;
+    textarea.value = realLink;
     document.body.appendChild(textarea);
     textarea.select();
     try {
       document.execCommand('copy');
-      showToast("리포트 주소가 복사되었습니다! 고객에게 톡으로 보내세요.");
+      showToast("리포트 실주소가 복사되었습니다! 고객에게 전송하세요.");
       setTimeout(closeFinishModal, 1500);
     } catch (err) {
-      showToast("복사 실패");
+      showToast("링크 복사에 실패했습니다.");
     } finally {
       document.body.removeChild(textarea);
     }
@@ -286,6 +391,12 @@ export default function App() {
     setFeedbackText('');
   };
 
+  const formatTime = (createdAt) => {
+    if (!createdAt) return "방금 전";
+    const date = createdAt.toDate ? createdAt.toDate() : new Date(createdAt);
+    return date.toLocaleDateString() + " " + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
   const myFeeds = currentUser ? feedData.filter(feed => feed.authorId === currentUser.id) : [];
 
   return (
@@ -294,17 +405,13 @@ export default function App() {
         body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; background-color: #f1f5f9; margin: 0; padding: 0; color: #334155; -webkit-tap-highlight-color: transparent; overflow-x: hidden; }
         :root { --primary: #14b8a6; --primary-hover: #0d9488; --primary-light: #ccfbf1; --card-bg: #ffffff; --text-main: #1e293b; --text-sub: #64748b; }
         
-        /* 웹앱 컨테이너 중앙 정렬 (PC 화면에서도 모바일처럼 보이게) */
         .app-wrapper { max-width: 480px; margin: 0 auto; min-height: 100vh; background-color: #ffffff; box-shadow: 0 0 20px rgba(0,0,0,0.05); position: relative; }
-        
         .app-header { position: sticky; top: 0; left: 0; width: 100%; height: 56px; background-color: var(--card-bg); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; box-sizing: border-box; z-index: 50; border-bottom: 1px solid #e2e8f0; }
         .header-icon { background: none; border: none; color: var(--text-main); font-size: 24px; cursor: pointer; padding: 8px; display: flex; align-items: center; justify-content: center; }
         .header-title { font-size: 18px; font-weight: 800; color: var(--primary); letter-spacing: -0.5px; }
         .header-placeholder { width: 40px; }
-        
         .view-section { padding-bottom: 90px; min-height: calc(100vh - 56px); box-sizing: border-box; background: #ffffff;}
 
-        /* 브랜드 후킹 배너 스카이 카드 */
         .brand-hook-card { background: linear-gradient(135deg, #0d9488, #14b8a6); color: white; padding: 20px; border-radius: 16px; margin-bottom: 24px; box-shadow: 0 10px 15px -3px rgba(20, 184, 166, 0.2); text-align: left; }
         .brand-hook-card h3 { margin: 0 0 6px 0; font-size: 18px; font-weight: 800; letter-spacing: -0.5px; }
         .brand-hook-card p { margin: 0; font-size: 13px; opacity: 0.9; line-height: 1.4; }
@@ -324,7 +431,7 @@ export default function App() {
         .sidebar-menu button { width: 100%; text-align: left; background: none; border: none; display: flex; align-items: center; padding: 18px 20px; color: var(--text-main); font-size: 16px; font-weight: 600; gap: 12px; cursor: pointer; }
         .sidebar-menu button:active { background-color: #f8fafc; }
 
-        /* Feed */
+        /* Feed & Cards */
         .feed-container { padding: 16px; }
         .empty-state { text-align: center; padding: 40px 20px; color: var(--text-sub); display: flex; flex-direction: column; align-items: center; gap: 12px; }
         .empty-state svg { color: #cbd5e1; width: 48px; height: 48px; }
@@ -334,7 +441,7 @@ export default function App() {
         .author-avatar img { width: 100%; height: 100%; object-fit: cover; }
         .author-name { font-size: 14px; font-weight: 700; margin: 0 0 2px 0; color: var(--text-main); }
         .author-time { font-size: 12px; color: var(--text-sub); margin: 0; }
-        .feed-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; line-height: 1.4; }
+        .feed-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; line-height: 1.4; text-align: left;}
         .feed-images { display: flex; gap: 8px; height: 160px; }
         .feed-img-wrap { flex: 1; position: relative; border-radius: 8px; overflow: hidden; background-color: #e2e8f0; }
         .feed-img-wrap img { width: 100%; height: 100%; object-fit: cover; }
@@ -347,7 +454,6 @@ export default function App() {
         .login-container p { color: var(--text-sub); margin-bottom: 40px; }
         .social-btn { width: 100%; max-width: 320px; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; border: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: center; gap: 12px; background: white; color: rgba(0,0,0,0.6); margin-bottom: 12px; }
 
-        /* Checkbox & Terms */
         .terms-box { text-align: left; background: #f8fafc; padding: 16px; border-radius: 12px; margin-bottom: 24px; }
         .terms-label { display: flex; align-items: center; font-size: 14px; font-weight: 600; color: var(--text-main); margin-bottom: 12px; cursor: pointer; }
         .terms-label input { margin-right: 10px; width: 18px; height: 18px; accent-color: var(--primary); }
@@ -355,7 +461,6 @@ export default function App() {
         .terms-sub label { display: flex; align-items: center; cursor: pointer; }
         .terms-sub input { margin-right: 8px; accent-color: var(--primary); }
 
-        /* Layout & Sheets */
         .upload-container { padding: 24px 20px; background: white; }
         .input-group { margin-bottom: 24px; text-align: left; }
         .input-group label.title-label { display: block; font-size: 15px; font-weight: 700; color: var(--text-main); margin-bottom: 10px; }
@@ -363,7 +468,8 @@ export default function App() {
         .photo-upload { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 160px; background-color: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 12px; cursor: pointer; color: #64748b; font-size: 14px; font-weight: 600; box-sizing: border-box; overflow: hidden; }
         .photo-upload img.preview { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; }
         .photo-upload .change-text { position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 6px 10px; border-radius: 6px; font-size: 12px; z-index: 11; }
-        .submit-btn { width: 100%; padding: 18px; background-color: var(--text-main); color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; margin-top: 10px; cursor: pointer; }
+        .submit-btn { width: 100%; padding: 18px; background-color: var(--text-main); color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; margin-top: 10px; cursor: pointer; transition: background-color 0.2s; }
+        .submit-btn:disabled { background-color: #cbd5e1; cursor: not-allowed; }
         
         .mypage-header { background: #f8fafc; padding: 30px 20px; text-align: center; border-bottom: 1px solid #e2e8f0; position: relative; }
         .profile-edit-btn { position: absolute; top: 16px; right: 16px; background: white; border: 1px solid #cbd5e1; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--text-sub); }
@@ -372,16 +478,13 @@ export default function App() {
         .stat-num { font-size: 20px; font-weight: 800; color: var(--primary); }
         .stat-label { font-size: 13px; color: var(--text-sub); }
 
-        /* Profile Edit Modal */
         .profile-pic-edit { width: 80px; height: 80px; border-radius: 50%; background: #e2e8f0; margin: 0 auto 20px auto; position: relative; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; color: var(--text-sub); overflow: hidden; cursor: pointer; }
         .profile-pic-edit img { width: 100%; height: 100%; object-fit: cover; }
         .profile-pic-overlay { position: absolute; bottom: 0; left: 0; width: 100%; height: 30%; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; }
 
-        /* FAB */
         .fab-container { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; display: flex; justify-content: center; z-index: 40; pointer-events: none; }
         .fab-btn { pointer-events: auto; background-color: var(--primary); color: white; border: none; padding: 16px 28px; border-radius: 30px; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; box-shadow: 0 8px 20px rgba(20, 184, 166, 0.4); cursor: pointer; }
         
-        /* Modals */
         .bottom-sheet-overlay, .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 200; opacity: 0; visibility: hidden; transition: all 0.3s; }
         .bottom-sheet-overlay.active, .modal-overlay.active { opacity: 1; visibility: visible; }
         .bottom-sheet { position: fixed; bottom: -100%; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: white; border-radius: 20px 20px 0 0; z-index: 201; padding: 24px 20px; box-sizing: border-box; transition: bottom 0.3s; }
@@ -408,7 +511,7 @@ export default function App() {
             <line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line>
           </svg>
         </button>
-        <div className="header-title">비포터</div>
+        <div className="header-title" onClick={() => switchView('feed')} style={{cursor:'pointer'}}>비포터</div>
         <div className="header-placeholder"></div>
       </header>
 
@@ -419,7 +522,7 @@ export default function App() {
           {currentUser ? (
             <>
               <div className="sidebar-profile-img">
-                {currentUser.profilePic ? <img src={currentUser.profilePic} alt="프로필" /> : currentUser.name.charAt(0)}
+                {currentUser.profilePic ? <img src={currentUser.profilePic} alt="프로필" /> : (currentUser.name || '작업자').charAt(0)}
               </div>
               <div className="sidebar-user-info">
                 <h2>{currentUser.name}</h2>
@@ -437,16 +540,15 @@ export default function App() {
           )}
         </div>
         <ul className="sidebar-menu">
+          <li><button onClick={() => { setIsMenuOpen(false); switchView('feed'); }}>🏠 피드 홈</button></li>
           {currentUser ? (
             <>
-              <li><button onClick={() => { setIsMenuOpen(false); switchView('feed'); }}>🏠 피드 홈</button></li>
               <li><button onClick={goToMyPage}>👤 마이페이지 (내 리포트)</button></li>
               <li><button onClick={handleOpenFeedback}>💡 개발자에게 피드백 전송</button></li>
               <li><button onClick={processLogout} style={{ color: '#ef4444' }}>🚪 로그아웃</button></li>
             </>
           ) : (
             <>
-              <li><button onClick={() => { setIsMenuOpen(false); switchView('feed'); }}>🏠 피드 홈</button></li>
               <li><button onClick={() => { setIsMenuOpen(false); switchView('login'); }}>🔐 로그인 / 회원가입</button></li>
               <li><button onClick={handleOpenFeedback}>💡 개발자에게 피드백 전송</button></li>
             </>
@@ -479,13 +581,14 @@ export default function App() {
                 <div key={item.id} className="feed-card">
                   <div className="feed-author">
                     <div className="author-avatar">
-                      {item.authorPic ? <img src={item.authorPic} alt="프로필" /> : item.authorName.charAt(0)}
+                      {/* 🔥 치명적 오류 수정 부분: authorName이 없는 예전 데이터로 인한 크래시 방지 */}
+                      {item.authorPic ? <img src={item.authorPic} alt="프로필" /> : (item.authorName || '작업자').charAt(0)}
                     </div>
                     <div className="author-info">
                       <p className="author-name">
-                        {item.authorName} {item.authorAffiliation && <span style={{fontSize:'12px', color:'var(--text-sub)'}}>({item.authorAffiliation})</span>}
+                        {item.authorName || '작업자'} {item.authorAffiliation && <span style={{fontSize:'12px', color:'var(--text-sub)'}}>({item.authorAffiliation})</span>}
                       </p>
-                      <p className="author-time">{item.time}</p>
+                      <p className="author-time">{formatTime(item.createdAt)}</p>
                     </div>
                   </div>
                   <div className="feed-title">{item.title}</div>
@@ -543,7 +646,7 @@ export default function App() {
           <div className="mypage-header">
             <button className="profile-edit-btn" onClick={openProfileEdit}>✏️ 프로필 수정</button>
             <div className="sidebar-profile-img" style={{ margin: '0 auto 12px auto', width: '72px', height: '72px', fontSize: '28px' }}>
-              {currentUser.profilePic ? <img src={currentUser.profilePic} alt="프로필" /> : currentUser.name.charAt(0)}
+              {currentUser.profilePic ? <img src={currentUser.profilePic} alt="프로필" /> : (currentUser.name || '작업자').charAt(0)}
             </div>
             <h2 style={{ margin: 0, fontSize: '20px', color: 'var(--text-main)' }}>{currentUser.name}</h2>
             <p style={{ margin: '4px 0 0 0', fontSize: '14px', color: 'var(--text-sub)' }}>
@@ -605,20 +708,71 @@ export default function App() {
                 {afterImg && <><img className="preview" src={afterImg} alt="작업 후" /><div className="change-text">다시 선택</div></>}
               </div>
             </div>
-            <button className="submit-btn" onClick={saveAndShareReport}>작성 완료 및 공유하기</button>
+            <button className="submit-btn" onClick={saveAndShareReport} disabled={isUploading}>
+              {isUploading ? "클라우드에 안전하게 저장 중..." : "작성 완료 및 공유하기"}
+            </button>
           </div>
         </div>
       )}
 
       {/* ==========================================
-          모달 및 바텀시트
+          VIEW 5: 고객 전용 리포트 상세조회 화면 (공유 링크 뷰)
       ========================================== */}
+      {currentView === 'detail' && (
+        <div className="view-section" style={{paddingTop: '20px'}}>
+          <div className="feed-container">
+            {isDetailLoading ? (
+              <div className="empty-state">
+                <p>리포트를 안전하게 불러오는 중입니다...</p>
+              </div>
+            ) : detailReport ? (
+              <>
+                <div style={{textAlign:'center', marginBottom:'24px'}}>
+                  <span style={{background:'var(--primary-light)', color:'var(--primary-hover)', padding:'6px 14px', borderRadius:'20px', fontSize:'12px', fontWeight:'bold'}}>
+                    🔒 인증된 작업 완료 리포트
+                  </span>
+                </div>
+                <div className="feed-card" style={{boxShadow:'0 10px 25px rgba(0,0,0,0.05)', border:'1px solid var(--primary-light)'}}>
+                  <div className="feed-author" style={{borderBottom:'1px solid #f1f5f9', paddingBottom:'12px'}}>
+                    <div className="author-avatar">
+                      {detailReport.authorPic ? <img src={detailReport.authorPic} alt="프로필" /> : (detailReport.authorName || '작업자').charAt(0)}
+                    </div>
+                    <div className="author-info">
+                      <p className="author-name">
+                        {detailReport.authorName || '작업자'} {detailReport.authorAffiliation && <span style={{fontSize:'12px', color:'var(--text-sub)'}}>({detailReport.authorAffiliation})</span>}
+                      </p>
+                      <p className="author-time">발행일시: {formatTime(detailReport.createdAt)}</p>
+                    </div>
+                  </div>
+                  <h2 style={{fontSize:'20px', fontWeight:'800', color:'var(--text-main)', margin:'16px 0'}}>{detailReport.title}</h2>
+                  
+                  <div style={{display:'flex', flexDirection:'column', gap:'16px'}}>
+                    <div>
+                      <p style={{margin:'0 0 6px 4px', fontSize:'13px', fontWeight:'bold', color:'#ef4444'}}>■ 작업 전 (Before)</p>
+                      <div className="feed-img-wrap" style={{height:'240px'}}><img src={detailReport.beforeImg} alt="Before" /></div>
+                    </div>
+                    <div>
+                      <p style={{margin:'0 0 6px 4px', fontSize:'13px', fontWeight:'bold', color:'var(--primary)'}}>■ 작업 후 (After)</p>
+                      <div className="feed-img-wrap" style={{height:'240px'}}><img src={detailReport.afterImg} alt="After" /></div>
+                    </div>
+                  </div>
+                </div>
+                <button className="submit-btn" style={{background:'var(--primary)'}} onClick={() => switchView('feed')}>비포터 홈 구경가기</button>
+              </>
+            ) : (
+              <div className="empty-state">
+                <p>리포트 데이터를 불러오지 못했습니다.</p>
+                <button className="sheet-btn" onClick={() => switchView('feed')}>홈으로 이동</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 약관 동의 모달 */}
       <div className={`modal-overlay ${isTermsModalOpen ? 'active' : ''}`}>
         <div className="modal-content" style={{ padding: '24px 20px' }}>
           <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>서비스 이용 약관 동의</h3>
-          
           <div className="terms-box">
             <label className="terms-label">
               <input type="checkbox" checked={termsAgreed && privacyAgreed} onChange={handleAgreeAll} />
@@ -629,7 +783,6 @@ export default function App() {
               <label><input type="checkbox" checked={privacyAgreed} onChange={(e) => setPrivacyAgreed(e.target.checked)} /> (필수) 개인정보 수집 및 이용 동의</label>
             </div>
           </div>
-
           <button className="sheet-btn" style={{ background: (termsAgreed && privacyAgreed) ? 'var(--primary)' : '#e2e8f0', color: (termsAgreed && privacyAgreed) ? 'white' : '#94a3b8', border: 'none' }} onClick={processLogin}>
             동의하고 로그인 계속하기
           </button>
@@ -641,22 +794,18 @@ export default function App() {
       <div className={`modal-overlay ${isProfileModalOpen ? 'active' : ''}`}>
         <div className="modal-content" style={{ padding: '24px 20px', width: '100%' }}>
           <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>프로필 수정</h3>
-          
           <div className="profile-pic-edit" onClick={() => profilePicRef.current.click()}>
-            {editProfilePic ? <img src={editProfilePic} alt="프로필" /> : (editName ? editName.charAt(0) : '?')}
+            {editProfilePic ? <img src={editProfilePic} alt="프로필" /> : (editName || '작업자').charAt(0)}
             <div className="profile-pic-overlay">📷</div>
           </div>
-          
           <div className="input-group" style={{ marginBottom: '16px' }}>
             <label className="title-label" style={{ fontSize: '13px' }}>이름 (닉네임)</label>
             <input type="text" className="title-input" style={{ padding: '12px' }} value={editName} onChange={(e) => setEditName(e.target.value)} />
           </div>
-          
           <div className="input-group" style={{ marginBottom: '24px' }}>
             <label className="title-label" style={{ fontSize: '13px' }}>소속 (회사명 또는 상호)</label>
             <input type="text" className="title-input" style={{ padding: '12px' }} placeholder="예: 김반장 클린" value={editAffiliation} onChange={(e) => setEditAffiliation(e.target.value)} />
           </div>
-
           <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none' }} onClick={saveProfile}>저장하기</button>
           <button className="sheet-btn cancel" onClick={() => setIsProfileModalOpen(false)}>취소</button>
         </div>
