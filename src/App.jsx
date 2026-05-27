@@ -4,12 +4,12 @@ import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signO
 
 // [필독] Firebase 설정값 (본인의 대시보드 값으로 교체해주세요)
 const firebaseConfig = {
- apiKey: "AIzaSyA_XmIf672lF5y7VyjoK-7FIHdBITgiwnw",
-  authDomain: "beforeter-72de2.firebaseapp.com",
-  projectId: "beforeter-72de2",
-  storageBucket: "beforeter-72de2.firebasestorage.app",
-  messagingSenderId: "849691385148",
-  appId: "1:849691385148:web:35b8a75e16e0b73f351239"
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_ID",
+  appId: "YOUR_APP_ID"
 };
 
 const app = initializeApp(firebaseConfig);
@@ -28,22 +28,45 @@ export default function App() {
   const [currentPhotoTarget, setCurrentPhotoTarget] = useState(''); 
   const [isFinishModalOpen, setIsFinishModalOpen] = useState(false);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false); // 약관 동의 모달
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false); // 프로필 수정 모달
   
-  // 업로드 및 피드백 폼 상태
+  // 폼 및 입력 상태
   const [taskTitle, setTaskTitle] = useState('');
   const [beforeImg, setBeforeImg] = useState('');
   const [afterImg, setAfterImg] = useState('');
   const [feedbackText, setFeedbackText] = useState('');
   const [toastMsg, setToastMsg] = useState({ show: false, msg: '' });
 
+  // 약관 동의 상태
+  const [termsAgreed, setTermsAgreed] = useState(false);
+  const [privacyAgreed, setPrivacyAgreed] = useState(false);
+
+  // 프로필 수정 상태
+  const [editName, setEditName] = useState('');
+  const [editAffiliation, setEditAffiliation] = useState('');
+  const [editProfilePic, setEditProfilePic] = useState('');
+
+  // 숨겨진 파일 인풋 참조
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
+  const profilePicRef = useRef(null); // 프로필 사진용
 
-  // 인증 감시
+  // === 인증 감시 및 프로필 병합 ===
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
-        setCurrentUser({ id: user.uid, name: user.displayName || '작업자', provider: 'Google' });
+        // 로컬스토리지에 저장된 추가 프로필 정보(소속, 사진)를 불러와 병합
+        const savedProfiles = JSON.parse(localStorage.getItem('beporter_profiles')) || {};
+        const userProfile = savedProfiles[user.uid] || {};
+        
+        setCurrentUser({ 
+          id: user.uid, 
+          name: userProfile.name || user.displayName || '작업자', 
+          affiliation: userProfile.affiliation || '',
+          profilePic: userProfile.profilePic || user.photoURL || '',
+          provider: 'Google' 
+        });
       } else {
         setCurrentUser(null);
       }
@@ -72,6 +95,7 @@ export default function App() {
     }
   };
 
+  // 오류 수정을 위해 누락되었던 함수들 추가
   const goToMyPage = () => {
     setIsMenuOpen(false);
     checkAuthAndAction(() => switchView('mypage'));
@@ -82,10 +106,29 @@ export default function App() {
     checkAuthAndAction(() => setIsFeedbackModalOpen(true));
   };
 
+  // === 로그인 & 약관 동의 ===
+  const handleLoginClick = () => {
+    setTermsAgreed(false);
+    setPrivacyAgreed(false);
+    setIsTermsModalOpen(true);
+  };
+
+  const handleAgreeAll = (e) => {
+    const isChecked = e.target.checked;
+    setTermsAgreed(isChecked);
+    setPrivacyAgreed(isChecked);
+  };
+
   const processLogin = async () => {
+    if (!termsAgreed || !privacyAgreed) {
+      showToast("필수 약관에 모두 동의해주세요.");
+      return;
+    }
+    
     try {
+      setIsTermsModalOpen(false);
       await signInWithPopup(auth, provider);
-      showToast(`구글 계정으로 로그인 되었습니다.`);
+      showToast(`로그인 되었습니다.`);
       switchView('feed');
     } catch (error) {
       showToast("로그인에 실패했습니다.");
@@ -103,6 +146,59 @@ export default function App() {
     }
   };
 
+  // === 프로필 관리 ===
+  const openProfileEdit = () => {
+    setEditName(currentUser.name);
+    setEditAffiliation(currentUser.affiliation);
+    setEditProfilePic(currentUser.profilePic);
+    setIsProfileModalOpen(true);
+  };
+
+  const handleProfilePicSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => setEditProfilePic(event.target.result);
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  };
+
+  const saveProfile = () => {
+    if (!editName.trim()) {
+      showToast("이름을 입력해주세요.");
+      return;
+    }
+    
+    const updatedUser = {
+      ...currentUser,
+      name: editName,
+      affiliation: editAffiliation,
+      profilePic: editProfilePic
+    };
+
+    // 로컬스토리지에 커스텀 프로필 저장 (DB 연동 전까지)
+    const savedProfiles = JSON.parse(localStorage.getItem('beporter_profiles')) || {};
+    savedProfiles[currentUser.id] = {
+      name: editName,
+      affiliation: editAffiliation,
+      profilePic: editProfilePic
+    };
+    localStorage.setItem('beporter_profiles', JSON.stringify(savedProfiles));
+
+    // 기존 작성한 피드들의 작성자 이름도 일괄 업데이트
+    const updatedFeeds = feedData.map(feed => 
+      feed.authorId === currentUser.id ? { ...feed, authorName: editName, authorAffiliation: editAffiliation, authorPic: editProfilePic } : feed
+    );
+    setFeedData(updatedFeeds);
+    localStorage.setItem('beporter_feeds', JSON.stringify(updatedFeeds));
+
+    setCurrentUser(updatedUser);
+    setIsProfileModalOpen(false);
+    showToast("프로필이 성공적으로 수정되었습니다.");
+  };
+
+  // === 리포트 작성 & 사진 업로드 ===
   const openPhotoSheet = (target) => {
     setCurrentPhotoTarget(target);
     setIsPhotoSheetOpen(true);
@@ -137,6 +233,8 @@ export default function App() {
       id: 'report_' + Date.now(),
       authorId: currentUser.id,
       authorName: currentUser.name,
+      authorAffiliation: currentUser.affiliation,
+      authorPic: currentUser.profilePic,
       time: "방금 전",
       title: taskTitle,
       beforeImg: beforeImg,
@@ -162,7 +260,7 @@ export default function App() {
   };
 
   const copyAndFinish = () => {
-    const dummyLink = "https://beforeter.imweb.me/report/" + Math.floor(Math.random() * 10000);
+    const dummyLink = "https://www.beforeter.com/report/" + Math.floor(Math.random() * 10000);
     const textarea = document.createElement('textarea');
     textarea.value = dummyLink;
     document.body.appendChild(textarea);
@@ -191,19 +289,22 @@ export default function App() {
   const myFeeds = currentUser ? feedData.filter(feed => feed.authorId === currentUser.id) : [];
 
   return (
-    <>
+    <div className="app-wrapper">
       <style>{`
-        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; background-color: #ffffff; margin: 0; padding: 0; color: #334155; -webkit-tap-highlight-color: transparent; overflow-x: hidden; }
+        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; background-color: #f1f5f9; margin: 0; padding: 0; color: #334155; -webkit-tap-highlight-color: transparent; overflow-x: hidden; }
         :root { --primary: #14b8a6; --primary-hover: #0d9488; --primary-light: #ccfbf1; --card-bg: #ffffff; --text-main: #1e293b; --text-sub: #64748b; }
         
-        .app-header { position: fixed; top: 0; left: 0; width: 100%; height: 56px; background-color: var(--card-bg); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; box-sizing: border-box; z-index: 50; border-bottom: 1px solid #e2e8f0; }
+        /* 웹앱 컨테이너 중앙 정렬 (PC 화면에서도 모바일처럼 보이게) */
+        .app-wrapper { max-width: 480px; margin: 0 auto; min-height: 100vh; background-color: #ffffff; box-shadow: 0 0 20px rgba(0,0,0,0.05); position: relative; }
+        
+        .app-header { position: sticky; top: 0; left: 0; width: 100%; height: 56px; background-color: var(--card-bg); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; box-sizing: border-box; z-index: 50; border-bottom: 1px solid #e2e8f0; }
         .header-icon { background: none; border: none; color: var(--text-main); font-size: 24px; cursor: pointer; padding: 8px; display: flex; align-items: center; justify-content: center; }
         .header-title { font-size: 18px; font-weight: 800; color: var(--primary); letter-spacing: -0.5px; }
         .header-placeholder { width: 40px; }
         
-        .view-section { padding-top: 56px; padding-bottom: 90px; min-height: 100vh; box-sizing: border-box; }
+        .view-section { padding-bottom: 90px; min-height: calc(100vh - 56px); box-sizing: border-box; background: #ffffff;}
 
-        /* 브랜드 후킹 배너 스카이 카드 (중요) */
+        /* 브랜드 후킹 배너 스카이 카드 */
         .brand-hook-card { background: linear-gradient(135deg, #0d9488, #14b8a6); color: white; padding: 20px; border-radius: 16px; margin-bottom: 24px; box-shadow: 0 10px 15px -3px rgba(20, 184, 166, 0.2); text-align: left; }
         .brand-hook-card h3 { margin: 0 0 6px 0; font-size: 18px; font-weight: 800; letter-spacing: -0.5px; }
         .brand-hook-card p { margin: 0; font-size: 13px; opacity: 0.9; line-height: 1.4; }
@@ -214,7 +315,8 @@ export default function App() {
         .sidebar { position: fixed; top: 0; left: -280px; width: 280px; height: 100%; background: white; z-index: 101; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); display: flex; flex-direction: column; box-shadow: 2px 0 12px rgba(0,0,0,0.1); }
         .sidebar.active { left: 0; }
         .sidebar-header { padding: 30px 20px; background-color: var(--primary-light); border-bottom: 1px solid #bae6fd; display: flex; align-items: center; gap: 12px; }
-        .sidebar-profile-img { width: 48px; height: 48px; background: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; color: var(--primary); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .sidebar-profile-img { width: 48px; height: 48px; background: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; color: var(--primary); box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }
+        .sidebar-profile-img img { width: 100%; height: 100%; object-fit: cover; }
         .sidebar-user-info h2 { margin: 0; color: var(--primary-hover); font-size: 18px; font-weight: 800; }
         .sidebar-user-info p { margin: 4px 0 0 0; font-size: 13px; color: var(--text-sub); }
         .sidebar-menu { list-style: none; padding: 0; margin: 0; flex: 1; }
@@ -223,12 +325,13 @@ export default function App() {
         .sidebar-menu button:active { background-color: #f8fafc; }
 
         /* Feed */
-        .feed-container { padding: 16px; max-width: 600px; margin: 0 auto; }
+        .feed-container { padding: 16px; }
         .empty-state { text-align: center; padding: 40px 20px; color: var(--text-sub); display: flex; flex-direction: column; align-items: center; gap: 12px; }
         .empty-state svg { color: #cbd5e1; width: 48px; height: 48px; }
         .feed-card { background: var(--card-bg); border-radius: 16px; padding: 16px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); border: 1px solid #f1f5f9; }
         .feed-author { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-        .author-avatar { width: 36px; height: 36px; background-color: var(--primary-light); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--primary-hover); font-weight: bold; font-size: 14px; }
+        .author-avatar { width: 36px; height: 36px; background-color: var(--primary-light); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--primary-hover); font-weight: bold; font-size: 14px; overflow: hidden; }
+        .author-avatar img { width: 100%; height: 100%; object-fit: cover; }
         .author-name { font-size: 14px; font-weight: 700; margin: 0 0 2px 0; color: var(--text-main); }
         .author-time { font-size: 12px; color: var(--text-sub); margin: 0; }
         .feed-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; line-height: 1.4; }
@@ -242,11 +345,19 @@ export default function App() {
         .login-logo { width: 80px; height: 80px; background: var(--primary); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: white; font-size: 40px; font-weight: bold; margin-bottom: 24px; box-shadow: 0 10px 20px rgba(20, 184, 166, 0.3); }
         .login-container h1 { font-size: 24px; color: var(--text-main); margin-bottom: 8px; }
         .login-container p { color: var(--text-sub); margin-bottom: 40px; }
-        .social-btn { width: 100%; max-width: 320px; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; border: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: center; gap: 12px; background: white; color: rgba(0,0,0,0.6); }
+        .social-btn { width: 100%; max-width: 320px; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; border: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: center; gap: 12px; background: white; color: rgba(0,0,0,0.6); margin-bottom: 12px; }
+
+        /* Checkbox & Terms */
+        .terms-box { text-align: left; background: #f8fafc; padding: 16px; border-radius: 12px; margin-bottom: 24px; }
+        .terms-label { display: flex; align-items: center; font-size: 14px; font-weight: 600; color: var(--text-main); margin-bottom: 12px; cursor: pointer; }
+        .terms-label input { margin-right: 10px; width: 18px; height: 18px; accent-color: var(--primary); }
+        .terms-sub { padding-left: 28px; font-size: 13px; color: var(--text-sub); display: flex; flex-direction: column; gap: 10px; }
+        .terms-sub label { display: flex; align-items: center; cursor: pointer; }
+        .terms-sub input { margin-right: 8px; accent-color: var(--primary); }
 
         /* Layout & Sheets */
-        .upload-container { padding: 24px 20px; max-width: 500px; margin: 0 auto; background: white; }
-        .input-group { margin-bottom: 24px; }
+        .upload-container { padding: 24px 20px; background: white; }
+        .input-group { margin-bottom: 24px; text-align: left; }
         .input-group label.title-label { display: block; font-size: 15px; font-weight: 700; color: var(--text-main); margin-bottom: 10px; }
         .title-input { width: 100%; padding: 16px; border: 1px solid #cbd5e1; border-radius: 12px; font-size: 16px; box-sizing: border-box; background-color: #f8fafc; }
         .photo-upload { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 160px; background-color: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 12px; cursor: pointer; color: #64748b; font-size: 14px; font-weight: 600; box-sizing: border-box; overflow: hidden; }
@@ -254,20 +365,26 @@ export default function App() {
         .photo-upload .change-text { position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 6px 10px; border-radius: 6px; font-size: 12px; z-index: 11; }
         .submit-btn { width: 100%; padding: 18px; background-color: var(--text-main); color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; margin-top: 10px; cursor: pointer; }
         
-        .mypage-header { background: #f8fafc; padding: 30px 20px; text-align: center; border-bottom: 1px solid #e2e8f0; }
+        .mypage-header { background: #f8fafc; padding: 30px 20px; text-align: center; border-bottom: 1px solid #e2e8f0; position: relative; }
+        .profile-edit-btn { position: absolute; top: 16px; right: 16px; background: white; border: 1px solid #cbd5e1; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--text-sub); }
         .mypage-stats { display: flex; justify-content: center; gap: 40px; margin-top: 16px; }
         .stat-item { display: flex; flex-direction: column; align-items: center; }
         .stat-num { font-size: 20px; font-weight: 800; color: var(--primary); }
         .stat-label { font-size: 13px; color: var(--text-sub); }
 
+        /* Profile Edit Modal */
+        .profile-pic-edit { width: 80px; height: 80px; border-radius: 50%; background: #e2e8f0; margin: 0 auto 20px auto; position: relative; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; color: var(--text-sub); overflow: hidden; cursor: pointer; }
+        .profile-pic-edit img { width: 100%; height: 100%; object-fit: cover; }
+        .profile-pic-overlay { position: absolute; bottom: 0; left: 0; width: 100%; height: 30%; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; }
+
         /* FAB */
-        .fab-container { position: fixed; bottom: 24px; left: 0; width: 100%; display: flex; justify-content: center; z-index: 40; pointer-events: none; }
+        .fab-container { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; display: flex; justify-content: center; z-index: 40; pointer-events: none; }
         .fab-btn { pointer-events: auto; background-color: var(--primary); color: white; border: none; padding: 16px 28px; border-radius: 30px; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; box-shadow: 0 8px 20px rgba(20, 184, 166, 0.4); cursor: pointer; }
         
         /* Modals */
         .bottom-sheet-overlay, .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 200; opacity: 0; visibility: hidden; transition: all 0.3s; }
         .bottom-sheet-overlay.active, .modal-overlay.active { opacity: 1; visibility: visible; }
-        .bottom-sheet { position: fixed; bottom: -100%; left: 0; width: 100%; background: white; border-radius: 20px 20px 0 0; z-index: 201; padding: 24px 20px; box-sizing: border-box; transition: bottom 0.3s; }
+        .bottom-sheet { position: fixed; bottom: -100%; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: white; border-radius: 20px 20px 0 0; z-index: 201; padding: 24px 20px; box-sizing: border-box; transition: bottom 0.3s; }
         .bottom-sheet.active { bottom: 0; }
         .sheet-btn { width: 100%; padding: 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 16px; font-weight: 600; margin-bottom: 12px; cursor: pointer; }
         .sheet-btn.cancel { background: white; border: none; color: #ef4444; margin-top: 8px; }
@@ -281,7 +398,19 @@ export default function App() {
       <div style={{ display: 'none' }}>
         <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} />
         <input type="file" accept="image/*" ref={galleryInputRef} onChange={handleFileSelect} />
+        <input type="file" accept="image/*" ref={profilePicRef} onChange={handleProfilePicSelect} />
       </div>
+
+      {/* 헤더 */}
+      <header className="app-header">
+        <button className="header-icon" onClick={toggleMenu}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+        <div className="header-title">비포터</div>
+        <div className="header-placeholder"></div>
+      </header>
 
       {/* 사이드바 */}
       <div className={`sidebar-overlay ${isMenuOpen ? 'active' : ''}`} onClick={toggleMenu}></div>
@@ -289,10 +418,12 @@ export default function App() {
         <div className="sidebar-header">
           {currentUser ? (
             <>
-              <div className="sidebar-profile-img">{currentUser.name.charAt(0)}</div>
+              <div className="sidebar-profile-img">
+                {currentUser.profilePic ? <img src={currentUser.profilePic} alt="프로필" /> : currentUser.name.charAt(0)}
+              </div>
               <div className="sidebar-user-info">
                 <h2>{currentUser.name}</h2>
-                <p>{currentUser.provider} 로그인 됨</p>
+                <p>{currentUser.affiliation ? currentUser.affiliation : `${currentUser.provider} 로그인 됨`}</p>
               </div>
             </>
           ) : (
@@ -308,12 +439,14 @@ export default function App() {
         <ul className="sidebar-menu">
           {currentUser ? (
             <>
+              <li><button onClick={() => { setIsMenuOpen(false); switchView('feed'); }}>🏠 피드 홈</button></li>
               <li><button onClick={goToMyPage}>👤 마이페이지 (내 리포트)</button></li>
               <li><button onClick={handleOpenFeedback}>💡 개발자에게 피드백 전송</button></li>
               <li><button onClick={processLogout} style={{ color: '#ef4444' }}>🚪 로그아웃</button></li>
             </>
           ) : (
             <>
+              <li><button onClick={() => { setIsMenuOpen(false); switchView('feed'); }}>🏠 피드 홈</button></li>
               <li><button onClick={() => { setIsMenuOpen(false); switchView('login'); }}>🔐 로그인 / 회원가입</button></li>
               <li><button onClick={handleOpenFeedback}>💡 개발자에게 피드백 전송</button></li>
             </>
@@ -326,18 +459,7 @@ export default function App() {
       ========================================== */}
       {currentView === 'feed' && (
         <div className="view-section">
-          <header className="app-header">
-            <button className="header-icon" onClick={toggleMenu}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line>
-              </svg>
-            </button>
-            <div className="header-title">비포터</div>
-            <div className="header-placeholder"></div>
-          </header>
-
           <div className="feed-container">
-            {/* ⭐️ 대표님의 아임웹 디자인 정체성을 지켜줄 후킹 카드 배너 고정 */}
             <div className="brand-hook-card">
               <h3>10초 완성 나만의 작업리포트 🚀</h3>
               <p>퇴근이 빨라지는 데일리 작업 리포트 서비스 '비포터'. 사진 2장으로 오늘 마감을 완벽하게 증명해 보세요.</p>
@@ -356,9 +478,13 @@ export default function App() {
               feedData.map((item) => (
                 <div key={item.id} className="feed-card">
                   <div className="feed-author">
-                    <div className="author-avatar">{item.authorName.charAt(0)}</div>
+                    <div className="author-avatar">
+                      {item.authorPic ? <img src={item.authorPic} alt="프로필" /> : item.authorName.charAt(0)}
+                    </div>
                     <div className="author-info">
-                      <p className="author-name">{item.authorName}</p>
+                      <p className="author-name">
+                        {item.authorName} {item.authorAffiliation && <span style={{fontSize:'12px', color:'var(--text-sub)'}}>({item.authorAffiliation})</span>}
+                      </p>
                       <p className="author-time">{item.time}</p>
                     </div>
                   </div>
@@ -393,23 +519,13 @@ export default function App() {
           VIEW 2: 로그인 화면
       ========================================== */}
       {currentView === 'login' && (
-        <div className="view-section">
-          <header className="app-header">
-            <button className="header-icon" onClick={() => switchView('feed')}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="15 18 9 12 15 6"></polyline>
-              </svg>
-            </button>
-            <div className="header-title">로그인</div>
-            <div className="header-placeholder"></div>
-          </header>
-          
-          <div className="login-container">
+        <div className="view-section" style={{ display:'flex' }}>
+          <div className="login-container" style={{ width:'100%' }}>
             <div className="login-logo">B</div>
             <h1>비포터 시작하기</h1>
             <p>1분만에 가입하고 신뢰를 공유하세요</p>
 
-            <button className="social-btn" onClick={processLogin}>
+            <button className="social-btn" onClick={handleLoginClick} style={{ backgroundColor: '#ffffff', border: '1px solid #cbd5e1' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M22 12c0-.82-.07-1.61-.2-2.38H12v4.5h5.68a5.4 5.4 0 0 1-2.34 3.55v2.95h3.79C21.34 18.57 22 15.55 22 12z"/>
               </svg>
@@ -424,22 +540,15 @@ export default function App() {
       ========================================== */}
       {currentView === 'mypage' && currentUser && (
         <div className="view-section">
-          <header className="app-header">
-            <button className="header-icon" onClick={() => switchView('feed')}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="15 18 9 12 15 6"></polyline>
-              </svg>
-            </button>
-            <div className="header-title">마이페이지</div>
-            <div className="header-placeholder"></div>
-          </header>
-
           <div className="mypage-header">
-            <div className="sidebar-profile-img" style={{ margin: '0 auto 12px auto', width: '64px', height: '64px', fontSize: '28px' }}>
-              {currentUser.name.charAt(0)}
+            <button className="profile-edit-btn" onClick={openProfileEdit}>✏️ 프로필 수정</button>
+            <div className="sidebar-profile-img" style={{ margin: '0 auto 12px auto', width: '72px', height: '72px', fontSize: '28px' }}>
+              {currentUser.profilePic ? <img src={currentUser.profilePic} alt="프로필" /> : currentUser.name.charAt(0)}
             </div>
             <h2 style={{ margin: 0, fontSize: '20px', color: 'var(--text-main)' }}>{currentUser.name}</h2>
-            <p style={{ margin: '4px 0 0 0', fontSize: '14px', color: 'var(--text-sub)' }}>{currentUser.provider} 연동됨</p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '14px', color: 'var(--text-sub)' }}>
+              {currentUser.affiliation ? currentUser.affiliation : '소속을 등록해주세요'}
+            </p>
             <div className="mypage-stats">
               <div className="stat-item">
                 <span className="stat-num">{myFeeds.length}</span>
@@ -450,7 +559,13 @@ export default function App() {
 
           <div className="feed-container">
             {myFeeds.length === 0 ? (
-              <p style={{ textAlign: 'center', color: 'var(--text-sub)', paddingTop: '20px' }}>작성한 리포트가 없습니다.</p>
+              <div className="empty-state" style={{ paddingTop: '40px' }}>
+                <p style={{ margin: 0, fontWeight: 600 }}>작성한 리포트가 없습니다.</p>
+                <p style={{ fontSize: '13px', marginTop: '-8px' }}>첫 번째 작업 결과를 기록해 보세요!</p>
+                <button className="sheet-btn" style={{ background: 'var(--primary)', color: 'white', border: 'none', maxWidth: '200px', marginTop: '10px' }} onClick={() => switchView('upload')}>
+                  ✍️ 새 리포트 작성하기
+                </button>
+              </div>
             ) : (
               myFeeds.map(item => (
                 <div key={item.id} className="feed-card">
@@ -471,16 +586,6 @@ export default function App() {
       ========================================== */}
       {currentView === 'upload' && (
         <div className="view-section">
-          <header className="app-header">
-            <button className="header-icon" onClick={() => switchView('feed')}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="15 18 9 12 15 6"></polyline>
-              </svg>
-            </button>
-            <div className="header-title">새 리포트 작성</div>
-            <div className="header-placeholder"></div>
-          </header>
-
           <div className="upload-container">
             <div className="input-group">
               <label className="title-label">작업 제목</label>
@@ -504,6 +609,58 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ==========================================
+          모달 및 바텀시트
+      ========================================== */}
+
+      {/* 약관 동의 모달 */}
+      <div className={`modal-overlay ${isTermsModalOpen ? 'active' : ''}`}>
+        <div className="modal-content" style={{ padding: '24px 20px' }}>
+          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>서비스 이용 약관 동의</h3>
+          
+          <div className="terms-box">
+            <label className="terms-label">
+              <input type="checkbox" checked={termsAgreed && privacyAgreed} onChange={handleAgreeAll} />
+              전체 동의하기
+            </label>
+            <div className="terms-sub">
+              <label><input type="checkbox" checked={termsAgreed} onChange={(e) => setTermsAgreed(e.target.checked)} /> (필수) 서비스 이용약관 동의</label>
+              <label><input type="checkbox" checked={privacyAgreed} onChange={(e) => setPrivacyAgreed(e.target.checked)} /> (필수) 개인정보 수집 및 이용 동의</label>
+            </div>
+          </div>
+
+          <button className="sheet-btn" style={{ background: (termsAgreed && privacyAgreed) ? 'var(--primary)' : '#e2e8f0', color: (termsAgreed && privacyAgreed) ? 'white' : '#94a3b8', border: 'none' }} onClick={processLogin}>
+            동의하고 로그인 계속하기
+          </button>
+          <button className="sheet-btn cancel" onClick={() => setIsTermsModalOpen(false)}>취소</button>
+        </div>
+      </div>
+
+      {/* 프로필 수정 모달 */}
+      <div className={`modal-overlay ${isProfileModalOpen ? 'active' : ''}`}>
+        <div className="modal-content" style={{ padding: '24px 20px', width: '100%' }}>
+          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>프로필 수정</h3>
+          
+          <div className="profile-pic-edit" onClick={() => profilePicRef.current.click()}>
+            {editProfilePic ? <img src={editProfilePic} alt="프로필" /> : (editName ? editName.charAt(0) : '?')}
+            <div className="profile-pic-overlay">📷</div>
+          </div>
+          
+          <div className="input-group" style={{ marginBottom: '16px' }}>
+            <label className="title-label" style={{ fontSize: '13px' }}>이름 (닉네임)</label>
+            <input type="text" className="title-input" style={{ padding: '12px' }} value={editName} onChange={(e) => setEditName(e.target.value)} />
+          </div>
+          
+          <div className="input-group" style={{ marginBottom: '24px' }}>
+            <label className="title-label" style={{ fontSize: '13px' }}>소속 (회사명 또는 상호)</label>
+            <input type="text" className="title-input" style={{ padding: '12px' }} placeholder="예: 김반장 클린" value={editAffiliation} onChange={(e) => setEditAffiliation(e.target.value)} />
+          </div>
+
+          <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none' }} onClick={saveProfile}>저장하기</button>
+          <button className="sheet-btn cancel" onClick={() => setIsProfileModalOpen(false)}>취소</button>
+        </div>
+      </div>
 
       {/* 사진 첨부 바텀시트 */}
       <div className={`bottom-sheet-overlay ${isPhotoSheetOpen ? 'active' : ''}`} onClick={() => setIsPhotoSheetOpen(false)}></div>
@@ -536,6 +693,6 @@ export default function App() {
       </div>
 
       <div className={`toast ${toastMsg.show ? 'show' : ''}`}>{toastMsg.msg}</div>
-    </>
+    </div>
   );
 }
