@@ -208,7 +208,21 @@ export default function App() {
       showToast(`로그인 되었습니다.`);
       switchView('feed');
     } catch (error) {
-      showToast("로그인에 실패했습니다.");
+      // 💡 에러 추적을 위한 콘솔 출력 및 사용자용 토스트 에러 메세지 수정
+      console.error("Firebase 로그인 실패 상세 원인:", error);
+      
+      let errorMessage = "로그인에 실패했습니다.";
+      if (error.code === 'auth/popup-closed-by-user') {
+        errorMessage = "로그인 팝업창을 닫으셨습니다.";
+      } else if (error.code === 'auth/unauthorized-domain') {
+        errorMessage = "승인되지 않은 도메인입니다. Firebase 콘솔을 확인해주세요.";
+      } else if (error.code === 'auth/operation-not-allowed') {
+        errorMessage = "Google 로그인이 비활성화되어 있습니다. Firebase 콘솔에서 켜주세요.";
+      } else if (error.message) {
+        errorMessage = `에러: ${error.message}`;
+      }
+      
+      showToast(errorMessage);
     }
   };
 
