@@ -2,52 +2,48 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "firebase/auth";
 
-// 1. Firebase 설정 (본인의 Firebase 대시보드에서 얻은 값을 여기에 넣어주세요)
+// [필독] Firebase 설정값 (본인의 대시보드 값으로 교체해주세요)
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_ID",
-  appId: "YOUR_APP_ID"
+ apiKey: "AIzaSyA_XmIf672lF5y7VyjoK-7FIHdBITgiwnw",
+  authDomain: "beforeter-72de2.firebaseapp.com",
+  projectId: "beforeter-72de2",
+  storageBucket: "beforeter-72de2.firebasestorage.app",
+  messagingSenderId: "849691385148",
+  appId: "1:849691385148:web:35b8a75e16e0b73f351239"
 };
 
-// 2. Firebase 초기화 (App 컴포넌트 외부에서 1회 실행)
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 
 export default function App() {
   // === 상태(State) 관리 ===
-  const [currentView, setCurrentView] = useState('feed'); // 'feed', 'login', 'mypage', 'upload'
+  const [currentView, setCurrentView] = useState('feed'); 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState(null); // Firebase에서 받아올 유저 정보
+  const [currentUser, setCurrentUser] = useState(null); 
   const [feedData, setFeedData] = useState(() => JSON.parse(localStorage.getItem('beporter_feeds')) || []);
   
   // 모달 및 바텀시트 상태
   const [isPhotoSheetOpen, setIsPhotoSheetOpen] = useState(false);
-  const [currentPhotoTarget, setCurrentPhotoTarget] = useState(''); // 'before' or 'after'
+  const [currentPhotoTarget, setCurrentPhotoTarget] = useState(''); 
   const [isFinishModalOpen, setIsFinishModalOpen] = useState(false);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   
-  // 업로드 폼 상태
+  // 업로드 및 피드백 폼 상태
   const [taskTitle, setTaskTitle] = useState('');
   const [beforeImg, setBeforeImg] = useState('');
   const [afterImg, setAfterImg] = useState('');
   const [feedbackText, setFeedbackText] = useState('');
-
-  // 토스트 메시지 상태
   const [toastMsg, setToastMsg] = useState({ show: false, msg: '' });
 
-  // 숨겨진 파일 인풋 참조 (useRef)
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
 
-  // === Firebase 로그인 상태 유지 (useEffect) ===
+  // 인증 감시
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
-        setCurrentUser({ id: user.uid, name: user.displayName || '사용자', provider: 'Google' });
+        setCurrentUser({ id: user.uid, name: user.displayName || '작업자', provider: 'Google' });
       } else {
         setCurrentUser(null);
       }
@@ -55,15 +51,11 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // === 토스트 메시지 로직 ===
   const showToast = (msg) => {
     setToastMsg({ show: true, msg });
-    setTimeout(() => {
-      setToastMsg({ show: false, msg: '' });
-    }, 3000);
+    setTimeout(() => setToastMsg({ show: false, msg: '' }), 3000);
   };
 
-  // === 네비게이션 제어 ===
   const switchView = (view) => {
     setCurrentView(view);
     window.scrollTo(0, 0);
@@ -71,7 +63,6 @@ export default function App() {
 
   const toggleMenu = () => setIsMenuOpen(!isMenuOpen);
 
-  // 권한 체크 헬퍼 함수
   const checkAuthAndAction = (actionCallback) => {
     if (!currentUser) {
       showToast("로그인이 필요한 기능입니다.");
@@ -91,15 +82,12 @@ export default function App() {
     checkAuthAndAction(() => setIsFeedbackModalOpen(true));
   };
 
-  // === 로그인 / 로그아웃 제어 (Firebase 적용) ===
   const processLogin = async () => {
     try {
       await signInWithPopup(auth, provider);
-      // user state는 onAuthStateChanged(useEffect)에서 자동으로 처리됩니다.
       showToast(`구글 계정으로 로그인 되었습니다.`);
       switchView('feed');
     } catch (error) {
-      console.error(error);
       showToast("로그인에 실패했습니다.");
     }
   };
@@ -111,11 +99,10 @@ export default function App() {
       setIsMenuOpen(false);
       switchView('feed');
     } catch (error) {
-      showToast("로그아웃에 실패했습니다.");
+      showToast("로그아웃 실패");
     }
   };
 
-  // === 사진 업로드 로직 ===
   const openPhotoSheet = (target) => {
     setCurrentPhotoTarget(target);
     setIsPhotoSheetOpen(true);
@@ -137,10 +124,9 @@ export default function App() {
       };
       reader.readAsDataURL(file);
     }
-    e.target.value = ''; // 같은 파일 재선택을 위해 초기화
+    e.target.value = ''; 
   };
 
-  // === 리포트 저장 및 공유 ===
   const saveAndShareReport = () => {
     if (!taskTitle || !beforeImg || !afterImg) {
       showToast("제목과 사진(전/후)을 모두 입력해주세요!");
@@ -163,7 +149,7 @@ export default function App() {
       localStorage.setItem('beporter_feeds', JSON.stringify(updatedFeeds));
       setIsFinishModalOpen(true);
     } catch (error) {
-      showToast("용량이 초과되었습니다. (LocalStorage 제한)");
+      showToast("용량이 초과되었습니다.");
     }
   };
 
@@ -176,41 +162,38 @@ export default function App() {
   };
 
   const copyAndFinish = () => {
-    const dummyLink = "https://beporter.app/report/" + Math.floor(Math.random() * 10000);
+    const dummyLink = "https://beforeter.imweb.me/report/" + Math.floor(Math.random() * 10000);
     const textarea = document.createElement('textarea');
     textarea.value = dummyLink;
     document.body.appendChild(textarea);
     textarea.select();
     try {
       document.execCommand('copy');
-      showToast("링크가 복사되었습니다! 카톡에 붙여넣기 하세요.");
+      showToast("리포트 주소가 복사되었습니다! 고객에게 톡으로 보내세요.");
       setTimeout(closeFinishModal, 1500);
     } catch (err) {
-      showToast("링크 복사에 실패했습니다.");
+      showToast("복사 실패");
     } finally {
       document.body.removeChild(textarea);
     }
   };
 
-  // === 피드백 전송 ===
   const submitFeedback = () => {
     if (!feedbackText.trim()) {
       showToast("내용을 입력해주세요.");
       return;
     }
-    showToast("소중한 의견 감사합니다! 적극 반영하겠습니다. ❤️");
+    showToast("소중한 의견 감사합니다! ❤️");
     setIsFeedbackModalOpen(false);
     setFeedbackText('');
   };
 
-  // --- 화면 렌더링 헬퍼 ---
   const myFeeds = currentUser ? feedData.filter(feed => feed.authorId === currentUser.id) : [];
 
   return (
     <>
       <style>{`
-        /* CSS in JS 렌더링 - React의 App.jsx 안에 독립적으로 위치하도록 세팅 */
-        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; background-color: #f1f5f9; margin: 0; padding: 0; color: #334155; -webkit-tap-highlight-color: transparent; }
+        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; background-color: #ffffff; margin: 0; padding: 0; color: #334155; -webkit-tap-highlight-color: transparent; overflow-x: hidden; }
         :root { --primary: #14b8a6; --primary-hover: #0d9488; --primary-light: #ccfbf1; --card-bg: #ffffff; --text-main: #1e293b; --text-sub: #64748b; }
         
         .app-header { position: fixed; top: 0; left: 0; width: 100%; height: 56px; background-color: var(--card-bg); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; box-sizing: border-box; z-index: 50; border-bottom: 1px solid #e2e8f0; }
@@ -218,8 +201,12 @@ export default function App() {
         .header-title { font-size: 18px; font-weight: 800; color: var(--primary); letter-spacing: -0.5px; }
         .header-placeholder { width: 40px; }
         
-        .view-section { padding-top: 56px; padding-bottom: 80px; min-height: 100vh; box-sizing: border-box; animation: fadeIn 0.3s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .view-section { padding-top: 56px; padding-bottom: 90px; min-height: 100vh; box-sizing: border-box; }
+
+        /* 브랜드 후킹 배너 스카이 카드 (중요) */
+        .brand-hook-card { background: linear-gradient(135deg, #0d9488, #14b8a6); color: white; padding: 20px; border-radius: 16px; margin-bottom: 24px; box-shadow: 0 10px 15px -3px rgba(20, 184, 166, 0.2); text-align: left; }
+        .brand-hook-card h3 { margin: 0 0 6px 0; font-size: 18px; font-weight: 800; letter-spacing: -0.5px; }
+        .brand-hook-card p { margin: 0; font-size: 13px; opacity: 0.9; line-height: 1.4; }
 
         /* Sidebar */
         .sidebar-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100; opacity: 0; visibility: hidden; transition: all 0.3s; }
@@ -237,72 +224,66 @@ export default function App() {
 
         /* Feed */
         .feed-container { padding: 16px; max-width: 600px; margin: 0 auto; }
-        .empty-state { text-align: center; padding: 60px 20px; color: var(--text-sub); display: flex; flex-direction: column; align-items: center; gap: 16px; }
-        .empty-state svg { color: #cbd5e1; width: 64px; height: 64px; }
-        .feed-card { background: var(--card-bg); border-radius: 16px; padding: 16px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        .empty-state { text-align: center; padding: 40px 20px; color: var(--text-sub); display: flex; flex-direction: column; align-items: center; gap: 12px; }
+        .empty-state svg { color: #cbd5e1; width: 48px; height: 48px; }
+        .feed-card { background: var(--card-bg); border-radius: 16px; padding: 16px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); border: 1px solid #f1f5f9; }
         .feed-author { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
         .author-avatar { width: 36px; height: 36px; background-color: var(--primary-light); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--primary-hover); font-weight: bold; font-size: 14px; }
         .author-name { font-size: 14px; font-weight: 700; margin: 0 0 2px 0; color: var(--text-main); }
         .author-time { font-size: 12px; color: var(--text-sub); margin: 0; }
         .feed-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; line-height: 1.4; }
-        .feed-images { display: flex; gap: 8px; height: 180px; }
+        .feed-images { display: flex; gap: 8px; height: 160px; }
         .feed-img-wrap { flex: 1; position: relative; border-radius: 8px; overflow: hidden; background-color: #e2e8f0; }
         .feed-img-wrap img { width: 100%; height: 100%; object-fit: cover; }
         .badge { position: absolute; top: 8px; left: 8px; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 800; color: white; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
 
-        /* Login */
+        /* Login & Forms */
         .login-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 56px); padding: 20px; text-align: center; background: white; }
         .login-logo { width: 80px; height: 80px; background: var(--primary); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: white; font-size: 40px; font-weight: bold; margin-bottom: 24px; box-shadow: 0 10px 20px rgba(20, 184, 166, 0.3); }
         .login-container h1 { font-size: 24px; color: var(--text-main); margin-bottom: 8px; }
         .login-container p { color: var(--text-sub); margin-bottom: 40px; }
-        .social-btn { width: 100%; max-width: 320px; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; border: none; display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 12px; transition: 0.2s; }
-        .btn-kakao { background-color: #FEE500; color: rgba(0,0,0,0.85); }
-        .btn-google { background-color: #ffffff; color: rgba(0,0,0,0.6); border: 1px solid #cbd5e1; }
+        .social-btn { width: 100%; max-width: 320px; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; border: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: center; gap: 12px; background: white; color: rgba(0,0,0,0.6); }
 
-        /* MyPage */
-        .mypage-header { background: white; padding: 30px 20px; text-align: center; border-bottom: 1px solid #e2e8f0; margin-bottom: 16px; }
-        .mypage-stats { display: flex; justify-content: center; gap: 40px; margin-top: 20px; }
-        .stat-item { display: flex; flex-direction: column; align-items: center; }
-        .stat-num { font-size: 20px; font-weight: 800; color: var(--primary); }
-        .stat-label { font-size: 13px; color: var(--text-sub); margin-top: 4px; }
-
-        /* Upload */
-        .upload-container { padding: 24px 20px; max-width: 500px; margin: 0 auto; background: white; min-height: calc(100vh - 56px); }
-        .input-group { margin-bottom: 28px; }
+        /* Layout & Sheets */
+        .upload-container { padding: 24px 20px; max-width: 500px; margin: 0 auto; background: white; }
+        .input-group { margin-bottom: 24px; }
         .input-group label.title-label { display: block; font-size: 15px; font-weight: 700; color: var(--text-main); margin-bottom: 10px; }
         .title-input { width: 100%; padding: 16px; border: 1px solid #cbd5e1; border-radius: 12px; font-size: 16px; box-sizing: border-box; background-color: #f8fafc; }
-        .title-input:focus { outline: none; border-color: var(--primary); background-color: white; box-shadow: 0 0 0 3px var(--primary-light); }
-        .photo-upload { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 180px; background-color: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 12px; cursor: pointer; color: #64748b; font-size: 14px; font-weight: 600; box-sizing: border-box; overflow: hidden; }
+        .photo-upload { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 160px; background-color: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 12px; cursor: pointer; color: #64748b; font-size: 14px; font-weight: 600; box-sizing: border-box; overflow: hidden; }
         .photo-upload img.preview { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; }
         .photo-upload .change-text { position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 6px 10px; border-radius: 6px; font-size: 12px; z-index: 11; }
-        .submit-btn { width: 100%; padding: 18px; background-color: var(--text-main); color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; margin-top: 20px; cursor: pointer; }
-
-        /* FAB & Modals */
-        .fab-container { position: fixed; bottom: 24px; left: 0; width: 100%; display: flex; justify-content: center; z-index: 40; pointer-events: none; }
-        .fab-btn { pointer-events: auto; background-color: var(--primary); color: white; border: none; padding: 14px 24px; border-radius: 30px; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; box-shadow: 0 6px 16px rgba(20, 184, 166, 0.4); cursor: pointer; }
+        .submit-btn { width: 100%; padding: 18px; background-color: var(--text-main); color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; margin-top: 10px; cursor: pointer; }
         
+        .mypage-header { background: #f8fafc; padding: 30px 20px; text-align: center; border-bottom: 1px solid #e2e8f0; }
+        .mypage-stats { display: flex; justify-content: center; gap: 40px; margin-top: 16px; }
+        .stat-item { display: flex; flex-direction: column; align-items: center; }
+        .stat-num { font-size: 20px; font-weight: 800; color: var(--primary); }
+        .stat-label { font-size: 13px; color: var(--text-sub); }
+
+        /* FAB */
+        .fab-container { position: fixed; bottom: 24px; left: 0; width: 100%; display: flex; justify-content: center; z-index: 40; pointer-events: none; }
+        .fab-btn { pointer-events: auto; background-color: var(--primary); color: white; border: none; padding: 16px 28px; border-radius: 30px; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; box-shadow: 0 8px 20px rgba(20, 184, 166, 0.4); cursor: pointer; }
+        
+        /* Modals */
         .bottom-sheet-overlay, .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 200; opacity: 0; visibility: hidden; transition: all 0.3s; }
         .bottom-sheet-overlay.active, .modal-overlay.active { opacity: 1; visibility: visible; }
         .bottom-sheet { position: fixed; bottom: -100%; left: 0; width: 100%; background: white; border-radius: 20px 20px 0 0; z-index: 201; padding: 24px 20px; box-sizing: border-box; transition: bottom 0.3s; }
         .bottom-sheet.active { bottom: 0; }
         .sheet-btn { width: 100%; padding: 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 16px; font-weight: 600; margin-bottom: 12px; cursor: pointer; }
         .sheet-btn.cancel { background: white; border: none; color: #ef4444; margin-top: 8px; }
-        
         .modal-content { background: white; width: 90%; max-width: 360px; border-radius: 20px; padding: 28px 24px; box-sizing: border-box; text-align: center; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
         .feedback-textarea { width: 100%; height: 100px; padding: 12px; border: 1px solid #cbd5e1; border-radius: 10px; font-family: inherit; font-size: 14px; resize: none; margin-bottom: 16px; box-sizing: border-box; }
         
-        /* Toast */
         .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); background-color: #334155; color: white; padding: 12px 24px; border-radius: 30px; font-size: 14px; font-weight: 600; z-index: 1000; opacity: 0; transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55); white-space: nowrap; pointer-events: none; }
         .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
       `}</style>
 
-      {/* 숨겨진 파일 인풋 */}
       <div style={{ display: 'none' }}>
         <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} />
         <input type="file" accept="image/*" ref={galleryInputRef} onChange={handleFileSelect} />
       </div>
 
-      {/* --- 사이드바 --- */}
+      {/* 사이드바 */}
       <div className={`sidebar-overlay ${isMenuOpen ? 'active' : ''}`} onClick={toggleMenu}></div>
       <div className={`sidebar ${isMenuOpen ? 'active' : ''}`}>
         <div className="sidebar-header">
@@ -341,32 +322,34 @@ export default function App() {
       </div>
 
       {/* ==========================================
-          VIEW 1: 피드 화면 (메인)
+          VIEW 1: 피드 화면 (메인 랜딩)
       ========================================== */}
       {currentView === 'feed' && (
         <div className="view-section">
           <header className="app-header">
             <button className="header-icon" onClick={toggleMenu}>
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="3" y1="12" x2="21" y2="12"></line>
-                <line x1="3" y1="6" x2="21" y2="6"></line>
-                <line x1="3" y1="18" x2="21" y2="18"></line>
+                <line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line>
               </svg>
             </button>
-            <div className="header-title">비포터 피드</div>
+            <div className="header-title">비포터</div>
             <div className="header-placeholder"></div>
           </header>
 
           <div className="feed-container">
+            {/* ⭐️ 대표님의 아임웹 디자인 정체성을 지켜줄 후킹 카드 배너 고정 */}
+            <div className="brand-hook-card">
+              <h3>10초 완성 나만의 작업리포트 🚀</h3>
+              <p>퇴근이 빨라지는 데일리 작업 리포트 서비스 '비포터'. 사진 2장으로 오늘 마감을 완벽하게 증명해 보세요.</p>
+            </div>
+
             {feedData.length === 0 ? (
               <div className="empty-state">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                  <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                  <polyline points="21 15 16 10 5 21"></polyline>
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>
                 </svg>
                 <p style={{ margin: 0, fontWeight: 600 }}>
-                  아직 작성된 리포트가 없습니다.<br />첫 번째 리포트를 등록해보세요!
+                  아직 등록된 리포트가 없습니다.<br />아래 버튼을 눌러 첫 리포트를 올려보세요!
                 </p>
               </div>
             ) : (
@@ -398,8 +381,7 @@ export default function App() {
           <div className="fab-container">
             <button className="fab-btn" onClick={() => checkAuthAndAction(() => switchView('upload'))}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="12" y1="5" x2="12" y2="19"></line>
-                <line x1="5" y1="12" x2="19" y2="12"></line>
+                <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
               </svg>
               내 리포트 올리기
             </button>
@@ -427,8 +409,7 @@ export default function App() {
             <h1>비포터 시작하기</h1>
             <p>1분만에 가입하고 신뢰를 공유하세요</p>
 
-            {/* 현재 Firebase Authentication을 이용한 구글 로그인만 연동됨 */}
-            <button className="social-btn btn-google" onClick={processLogin}>
+            <button className="social-btn" onClick={processLogin}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M22 12c0-.82-.07-1.61-.2-2.38H12v4.5h5.68a5.4 5.4 0 0 1-2.34 3.55v2.95h3.79C21.34 18.57 22 15.55 22 12z"/>
               </svg>
@@ -469,7 +450,7 @@ export default function App() {
 
           <div className="feed-container">
             {myFeeds.length === 0 ? (
-              <p style={{ textAlign: 'center', color: 'var(--text-sub)' }}>작성한 리포트가 없습니다.</p>
+              <p style={{ textAlign: 'center', color: 'var(--text-sub)', paddingTop: '20px' }}>작성한 리포트가 없습니다.</p>
             ) : (
               myFeeds.map(item => (
                 <div key={item.id} className="feed-card">
@@ -503,36 +484,20 @@ export default function App() {
           <div className="upload-container">
             <div className="input-group">
               <label className="title-label">작업 제목</label>
-              <input 
-                type="text" 
-                className="title-input" 
-                placeholder="어떤 작업을 하셨나요?" 
-                value={taskTitle}
-                onChange={(e) => setTaskTitle(e.target.value)}
-              />
+              <input type="text" className="title-input" placeholder="어떤 작업을 하셨나요?" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} />
             </div>
             <div className="input-group">
               <label className="title-label">작업 전 사진 첨부해주세요.</label>
               <div className="photo-upload" onClick={() => openPhotoSheet('before')}>
                 {!beforeImg && <span>📸 + 사진 추가하기</span>}
-                {beforeImg && (
-                  <>
-                    <img className="preview" src={beforeImg} alt="작업 전" />
-                    <div className="change-text">다시 선택</div>
-                  </>
-                )}
+                {beforeImg && <><img className="preview" src={beforeImg} alt="작업 전" /><div className="change-text">다시 선택</div></>}
               </div>
             </div>
             <div className="input-group">
               <label className="title-label">작업 후 사진 첨부해주세요.</label>
               <div className="photo-upload" onClick={() => openPhotoSheet('after')}>
                 {!afterImg && <span>✨ + 사진 추가하기</span>}
-                {afterImg && (
-                  <>
-                    <img className="preview" src={afterImg} alt="작업 후" />
-                    <div className="change-text">다시 선택</div>
-                  </>
-                )}
+                {afterImg && <><img className="preview" src={afterImg} alt="작업 후" /><div className="change-text">다시 선택</div></>}
               </div>
             </div>
             <button className="submit-btn" onClick={saveAndShareReport}>작성 완료 및 공유하기</button>
@@ -540,10 +505,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ==========================================
-          모달 및 시트 요소들
-      ========================================== */}
-      
       {/* 사진 첨부 바텀시트 */}
       <div className={`bottom-sheet-overlay ${isPhotoSheetOpen ? 'active' : ''}`} onClick={() => setIsPhotoSheetOpen(false)}></div>
       <div className={`bottom-sheet ${isPhotoSheetOpen ? 'active' : ''}`}>
@@ -568,18 +529,12 @@ export default function App() {
         <div className="modal-content">
           <h3 style={{ marginTop: 0, marginBottom: '12px' }}>개발자에게 피드백 전송</h3>
           <p style={{ fontSize: '13px', color: 'var(--text-sub)', marginBottom: '16px' }}>불편한 점이나 추가되었으면 하는<br/>기능을 자유롭게 적어주세요!</p>
-          <textarea 
-            className="feedback-textarea" 
-            placeholder="예: 사진을 여러 장 올리게 해주세요"
-            value={feedbackText}
-            onChange={(e) => setFeedbackText(e.target.value)}
-          ></textarea>
+          <textarea className="feedback-textarea" placeholder="예: 사진을 여러 장 올리게 해주세요" value={feedbackText} onChange={(e) => setFeedbackText(e.target.value)}></textarea>
           <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none' }} onClick={submitFeedback}>보내기</button>
           <button className="sheet-btn cancel" style={{ marginTop: 0 }} onClick={() => setIsFeedbackModalOpen(false)}>취소</button>
         </div>
       </div>
 
-      {/* 토스트 메시지 */}
       <div className={`toast ${toastMsg.show ? 'show' : ''}`}>{toastMsg.msg}</div>
     </>
   );
