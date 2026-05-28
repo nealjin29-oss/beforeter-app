@@ -71,6 +71,9 @@ export default function App() {
   const [editDocStatus, setEditDocStatus] = useState('public');
 
   const [commentInput, setCommentInput] = useState('');
+  const [detailViewMode, setDetailViewMode] = useState('horizontal'); // horizontal 디폴트로 변경
+  const [flippedCards, setFlippedCards] = useState({}); // Flip 모드용 카드 상태
+  const [selectedImage, setSelectedImage] = useState(null); // 사진 확대용 상태
 
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
@@ -140,19 +143,33 @@ export default function App() {
       if (path.includes('/report/')) {
         const parts = path.split('/report/');
         const reportId = parts[parts.length - 1];
-        if (reportId) {
-          setCurrentView('detail'); setIsDetailLoading(true);
-          try {
-            const docSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', reportId));
-            if (docSnap.exists()) setDetailReport({ id: docSnap.id, ...docSnap.data() });
-            else { showToast("존재하지 않는 리포트입니다."); setCurrentView('feed'); }
-          } catch (err) { showToast("오류가 발생했습니다."); setCurrentView('feed'); } 
-          finally { setIsDetailLoading(false); }
-        }
+        if (reportId) openDetailView(reportId);
       }
     };
     checkSharedLink();
   }, []);
+
+  const openDetailView = async (reportId) => {
+    setCurrentView('detail'); 
+    setIsDetailLoading(true); 
+    setDetailViewMode('horizontal'); // horizontal 디폴트로 변경
+    setFlippedCards({});
+    try {
+      const docSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', reportId));
+      if (docSnap.exists()) {
+        setDetailReport({ id: docSnap.id, ...docSnap.data() });
+        window.history.pushState({}, '', '/report/' + reportId);
+      } else { 
+        showToast("존재하지 않는 리포트입니다."); 
+        setCurrentView('feed'); 
+      }
+    } catch (err) { 
+      showToast("오류가 발생했습니다."); 
+      setCurrentView('feed'); 
+    } finally { 
+      setIsDetailLoading(false); 
+    }
+  };
 
   const showToast = (msg) => { setToastMsg({ show: true, msg }); setTimeout(() => setToastMsg({ show: false, msg: '' }), 3000); };
   
@@ -179,7 +196,7 @@ export default function App() {
 
   const openProfileEdit = () => { setEditName(currentUser.name); setEditAffiliation(currentUser.affiliation); setEditProfilePic(currentUser.profilePic); setIsProfileModalOpen(true); };
 
-  // EXIF 시간 추출 및 워터마크 새기는 Canvas 로직
+  // 이미지 압축 (워터마크 삭제됨)
   const resizeAndCompressImage = (file, callback, maxWidth = 800) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -191,18 +208,6 @@ export default function App() {
         canvas.width = width; canvas.height = height;
         const ctx = canvas.getContext('2d'); 
         ctx.drawImage(img, 0, 0, width, height);
-        
-        // 워터마크 생성 (촬영 일시 또는 파일 수정 일시)
-        const date = new Date(file.lastModified || Date.now());
-        const timeStr = `${date.getFullYear()}.${String(date.getMonth()+1).padStart(2,'0')}.${String(date.getDate()).padStart(2,'0')} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
-        
-        ctx.font = `bold ${Math.max(14, width/25)}px Pretendard, sans-serif`;
-        ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-        ctx.shadowColor = "rgba(0,0,0,0.8)";
-        ctx.shadowBlur = 4;
-        ctx.textAlign = "right";
-        ctx.fillText(timeStr, width - 15, height - 15);
-
         callback(canvas.toDataURL('image/jpeg', 0.7));
       };
     };
@@ -370,12 +375,13 @@ export default function App() {
         const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', detailReport.id);
         const updatedComments = [...(detailReport.comments || []), newComment];
         await updateDoc(docRef, { comments: updatedComments });
+        // 로컬 상태 즉시 갱신
+        setDetailReport(prev => ({ ...prev, comments: updatedComments }));
         setCommentInput('');
         showToast("댓글이 등록되었습니다.");
     } catch(e) { showToast("댓글 등록에 실패했습니다."); }
   };
 
-  // 피드백 전송 함수 추가 (위 코드에 누락되어 있어서 추가함)
   const submitFeedback = () => { 
     if (!feedbackText.trim()) return showToast("내용을 입력해주세요."); 
     showToast("소중한 의견 감사합니다! 답변은 이메일로 보내드릴게요. ❤️"); 
@@ -384,16 +390,18 @@ export default function App() {
     setFeedbackCategory('기능 관련');
   };
 
-  // YYYY/MM/DD 형식 포맷팅
   const formatDisplayTime = (item) => {
     let displayStr = item.taskDate ? item.taskDate.replace(/-/g, '/') : "날짜 미상";
     if (item.location) displayStr += ` • ${item.location}`;
     return displayStr;
   };
 
+  const toggleFlip = (idx) => {
+    setFlippedCards(prev => ({ ...prev, [idx]: !prev[idx] }));
+  };
+
   const myFeeds = currentUser ? feedData.filter(f => f.authorId === currentUser.id) : [];
 
-  // 유저 등급 계산 로직 (리포트 개수 100회 단위)
   const getUserTier = (count) => {
     if (count >= 500) return { name: '🌈 무지개 장갑', color: 'linear-gradient(90deg, #ef4444, #eab308, #22c55e, #3b82f6)', text: 'white' };
     if (count >= 400) return { name: '🔴 빨간 장갑', color: '#ef4444', text: 'white' };
@@ -404,7 +412,6 @@ export default function App() {
   };
   const userTier = getUserTier(myFeeds.length);
 
-  // 작성자 뱃지 안전한 렌더링 헬퍼
   const renderAuthorBadge = (authorId, authorName) => {
     const count = feedData.filter(f => f.authorId === authorId).length;
     const tier = getUserTier(count);
@@ -418,7 +425,6 @@ export default function App() {
     );
   };
 
-  // 구버전(단건) 데이터를 신버전(배열)로 호환 렌더링하기 위한 헬퍼
   const getSpacesToRender = (report) => {
     if (report.spaces && report.spaces.length > 0) return report.spaces;
     return [{ id: 1, spaceName: '', beforeImg: report.beforeImg, afterImg: report.afterImg, beforeDesc: report.beforeDesc, afterDesc: report.afterDesc }];
@@ -454,6 +460,7 @@ export default function App() {
         .empty-state svg { color: #cbd5e1; width: 48px; height: 48px; }
         .feed-card { background: var(--card-bg); border-radius: 16px; padding: 16px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); border: 1px solid #f1f5f9; cursor: pointer; transition: transform 0.2s;}
         .feed-card:active { transform: scale(0.98); }
+        .detail-card { background: var(--card-bg); border-radius: 16px; padding: 20px; margin-bottom: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); border: 1px solid var(--primary-light); }
         .feed-author { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
         .author-avatar { width: 36px; height: 36px; background-color: var(--primary-light); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--primary-hover); font-weight: bold; font-size: 14px; overflow: hidden; }
         .author-avatar img { width: 100%; height: 100%; object-fit: cover; }
@@ -506,13 +513,27 @@ export default function App() {
         .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); background-color: #334155; color: white; padding: 12px 24px; border-radius: 30px; font-size: 14px; font-weight: 600; z-index: 1000; opacity: 0; transition: all 0.3s; white-space: nowrap; pointer-events: none; }
         .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
         
-        /* 추가 및 변경 스타일 */
+        /* 뷰 모드 및 세그먼트 컨트롤 */
+        .view-mode-control { display:flex; background:#f1f5f9; padding:4px; border-radius:12px; margin-bottom:20px; }
+        .view-mode-btn { flex:1; padding:10px; text-align:center; font-size:13px; font-weight:700; border-radius:8px; cursor:pointer; color:var(--text-sub); transition: 0.2s; }
+        .view-mode-btn.active { background:white; color:var(--primary); box-shadow:0 2px 4px rgba(0,0,0,0.05); }
         .segment-control { display:flex; background:#f1f5f9; padding:4px; border-radius:12px; margin-bottom:24px; }
         .segment-btn { flex:1; padding:10px; text-align:center; font-size:14px; font-weight:700; border-radius:8px; cursor:pointer; color:var(--text-sub); }
         .segment-btn.active { background:white; color:var(--primary); box-shadow:0 2px 4px rgba(0,0,0,0.05); }
+        
+        /* 공간 블록 (다중 정돈) */
         .space-block { background: #f8fafc; padding: 16px; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 20px; }
         .history-box { background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; margin-top: 16px; font-size: 12px; color: var(--text-sub); text-align: left; }
         
+        /* 플립 카드 애니메이션 */
+        .flip-card { perspective: 1000px; width: 100%; height: 260px; cursor: pointer; border-radius: 8px; }
+        .flip-card-inner { position: relative; width: 100%; height: 100%; transition: transform 0.6s; transform-style: preserve-3d; }
+        .flip-card.flipped .flip-card-inner { transform: rotateY(180deg); }
+        .flip-card-front, .flip-card-back { position: absolute; width: 100%; height: 100%; backface-visibility: hidden; border-radius: 8px; overflow: hidden; background-color: #e2e8f0; }
+        .flip-card-back { transform: rotateY(180deg); }
+        .img-label { position: absolute; top: 10px; left: 10px; z-index: 10; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 800; color: white; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
+
+        /* 댓글 영역 */
         .comment-section { margin-top: 24px; border-top: 1px solid #e2e8f0; padding-top: 24px; }
         .comment-item { display: flex; gap: 10px; margin-bottom: 16px; text-align: left; }
         .comment-avatar { width: 32px; height: 32px; background: var(--primary-light); color: var(--primary-hover); font-weight: bold; border-radius: 50%; display: flex; align-items: center; justify-content: center; overflow: hidden; }
@@ -563,13 +584,13 @@ export default function App() {
         <div className="view-section">
           <div className="feed-container">
             <div className="brand-hook-card"><h3>10초 완성 나만의 작업리포트 🚀</h3><p>사진 2장으로 나를 증명하다 비포터</p></div>
-            {feedData.filter(f => f.status !== 'private' || (currentUser && f.authorId === currentUser.id)).length === 0 ? (
+            {feedData.filter(f => f.status === 'public').length === 0 ? (
               <div className="empty-state">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
                 <p style={{ margin: 0, fontWeight: 600 }}>아직 등록된 리포트가 없습니다.<br />아래 버튼을 눌러 첫 리포트를 올려보세요!</p>
               </div>
             ) : (
-              feedData.filter(f => f.status !== 'private' || (currentUser && f.authorId === currentUser.id)).map((item) => {
+              feedData.filter(f => f.status === 'public').map((item) => {
                 const renderSpaces = getSpacesToRender(item);
                 return (
                   <div key={item.id} className="feed-card" onClick={() => openDetailView(item.id)}>
@@ -628,7 +649,15 @@ export default function App() {
                 const renderSpaces = getSpacesToRender(item);
                 return (
                   <div key={item.id} className="feed-card" onClick={() => openDetailView(item.id)}>
-                    <div className="feed-title">{item.status === 'private' ? '🔒 ' : ''}{item.title}</div>
+                    <div className="feed-title" style={{marginBottom: '10px'}}>{item.status === 'private' ? '🔒 ' : ''}{item.title}</div>
+                    
+                    {/* 개선된 마이페이지 리포트 정보 (날짜, 사진 수, 댓글 수) */}
+                    <div style={{display:'flex', gap:'12px', fontSize:'12px', color:'var(--text-sub)', marginBottom:'12px', fontWeight:'600'}}>
+                      <span>📅 {item.taskDate ? item.taskDate.replace(/-/g, '.') : '날짜 미상'}</span>
+                      <span>📸 사진 {renderSpaces.length * 2}장</span>
+                      <span>💬 댓글 {(item.comments || []).length}개</span>
+                    </div>
+
                     <div className="feed-images">
                       <div className="feed-img-wrap"><img src={renderSpaces[0].beforeImg} alt="Before" /></div>
                       <div className="feed-img-wrap"><img src={renderSpaces[0].afterImg} alt="After" /></div>
@@ -707,33 +736,109 @@ export default function App() {
                 <button onClick={openReportEdit} style={{background:'none', border:'1px solid #cbd5e1', padding:'6px 12px', borderRadius:'20px', fontSize:'12px', fontWeight:'600', cursor:'pointer'}}>⚙️ 관리</button>
               )}
             </div>
-            <div className="feed-card" style={{boxShadow:'0 10px 25px rgba(0,0,0,0.05)', border:'1px solid var(--primary-light)'}}>
-              <div className="feed-author" style={{borderBottom:'1px solid #f1f5f9', paddingBottom:'12px'}}>
-                <div className="author-avatar">{detailReport.authorPic ? <img src={detailReport.authorPic} alt="프로필" /> : (detailReport.authorName || '작업자').charAt(0)}</div>
-                <div className="author-info">
-                  {renderAuthorBadge(detailReport.authorId, detailReport.authorName)}
-                  <p className="author-time">{formatDisplayTime(detailReport)}</p>
+            
+            {/* 해결 1: 상세 뷰 전용 클래스 detail-card로 변경 (전체가 클릭되는 오류 방지) */}
+            <div className="detail-card">
+              <div className="feed-author" style={{borderBottom:'1px solid #f1f5f9', paddingBottom:'16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
+                  <div className="author-avatar">{detailReport.authorPic ? <img src={detailReport.authorPic} alt="프로필" /> : (detailReport.authorName || '작업자').charAt(0)}</div>
+                  <div className="author-info">
+                    {renderAuthorBadge(detailReport.authorId, detailReport.authorName)}
+                    <p className="author-time">{formatDisplayTime(detailReport)}</p>
+                  </div>
                 </div>
+                <button onClick={() => showToast('작업자 상세 프로필 기능은 준비중입니다.')} style={{background:'#f1f5f9', color:'var(--text-main)', border:'none', padding:'6px 12px', borderRadius:'16px', fontSize:'12px', fontWeight:'700', cursor:'pointer'}}>프로필 보기</button>
               </div>
               
-              <h2 style={{fontSize:'20px', fontWeight:'800', color:'var(--text-main)', margin:'16px 0'}}>{detailReport.title}</h2>
+              <h2 style={{fontSize:'22px', fontWeight:'800', color:'var(--text-main)', margin: '16px 0 16px 0'}}>{detailReport.title}</h2>
               
-              {/* 다중/단건 호환 렌더링 */}
+              {/* 해결 2: 작업자 소개 영역 */}
+              <div style={{background:'#f8fafc', padding:'16px', borderRadius:'12px', marginBottom:'24px', border:'1px solid #e2e8f0'}}>
+                <p style={{fontSize:'14px', fontWeight:'700', margin:'0 0 8px 0', color:'var(--text-main)'}}>👨‍🔧 작업자 소개</p>
+                <p style={{fontSize:'13px', color:'var(--text-sub)', margin:0, lineHeight:'1.5'}}>
+                  {detailReport.authorAffiliation ? `${detailReport.authorAffiliation} 소속 전문가입니다.` : '신뢰와 정성을 다하는 비포터 인증 전문가입니다.'}<br/>
+                  다년간의 경험과 노하우로 최고의 결과물을 제공해 드립니다.
+                </p>
+              </div>
+              
+              {/* === 뷰 모드 컨트롤러 === */}
+              <div className="view-mode-control">
+                <div className={`view-mode-btn ${detailViewMode==='horizontal'?'active':''}`} onClick={()=>setDetailViewMode('horizontal')}>가로 보기</div>
+                <div className={`view-mode-btn ${detailViewMode==='flip'?'active':''}`} onClick={()=>setDetailViewMode('flip')}>한 장 보기</div>
+                <div className={`view-mode-btn ${detailViewMode==='vertical'?'active':''}`} onClick={()=>setDetailViewMode('vertical')}>세로 보기</div>
+              </div>
+              
+              {(detailViewMode === 'horizontal' || detailViewMode === 'vertical') && (
+                <p style={{fontSize:'12px', color:'var(--text-sub)', textAlign:'center', marginBottom:'16px', fontWeight:'600'}}>🔍 자세히 보길 원하시면 사진을 눌러보세요.</p>
+              )}
+
+              {/* 다중/단건 공간별 렌더링 및 뷰 모드 적용 */}
               {getSpacesToRender(detailReport).map((sp, idx) => (
-                <div key={idx} style={{marginBottom: '32px'}}>
-                  {sp.spaceName && <h4 style={{margin:'0 0 12px 0', color:'var(--primary-hover)'}}>📍 {sp.spaceName}</h4>}
-                  <div style={{display:'flex', flexDirection:'column', gap:'16px'}}>
-                    <div>
-                      <p style={{margin:'0 0 6px 4px', fontSize:'13px', fontWeight:'bold', color:'#ef4444'}}>■ 작업 전 (Before)</p>
-                      <div className="feed-img-wrap" style={{height:'auto'}}><img src={sp.beforeImg} style={{display:'block'}} /></div>
-                      {sp.beforeDesc && <p style={{fontSize:'14px', color:'var(--text-main)', background:'#f8fafc', padding:'12px', borderRadius:'8px', margin:'8px 0 0 0'}}>{sp.beforeDesc}</p>}
+                <div key={idx} style={{marginBottom: '24px', background: '#fff', padding: '16px', borderRadius: '16px', border: '1px solid #f1f5f9', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.02)'}}>
+                  {sp.spaceName && (
+                    <h4 style={{margin:'0 0 16px 0', color:'var(--text-main)', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '6px'}}>
+                      <span style={{background:'var(--primary-light)', padding:'4px 8px', borderRadius:'6px', color:'var(--primary-hover)'}}>📍</span> {sp.spaceName}
+                    </h4>
+                  )}
+                  
+                  {/* 세로 보기 */}
+                  {detailViewMode === 'vertical' && (
+                    <div style={{display:'flex', flexDirection:'column', gap:'16px'}}>
+                      <div>
+                        <p style={{margin:'0 0 8px 4px', fontSize:'13px', fontWeight:'bold', color:'#ef4444'}}>■ 작업 전 (Before)</p>
+                        <div className="feed-img-wrap" style={{height:'auto', minHeight:'200px', cursor:'zoom-in'}} onClick={() => setSelectedImage(sp.beforeImg)}><img src={sp.beforeImg} style={{display:'block', width:'100%'}} /></div>
+                        {sp.beforeDesc && <p style={{fontSize:'14px', color:'var(--text-main)', background:'#f8fafc', padding:'12px', borderRadius:'8px', margin:'8px 0 0 0'}}>{sp.beforeDesc}</p>}
+                      </div>
+                      <div>
+                        <p style={{margin:'0 0 8px 4px', fontSize:'13px', fontWeight:'bold', color:'var(--primary)'}}>■ 작업 후 (After)</p>
+                        <div className="feed-img-wrap" style={{height:'auto', minHeight:'200px', cursor:'zoom-in'}} onClick={() => setSelectedImage(sp.afterImg)}><img src={sp.afterImg} style={{display:'block', width:'100%'}} /></div>
+                        {sp.afterDesc && <p style={{fontSize:'14px', color:'var(--text-main)', background:'#f8fafc', padding:'12px', borderRadius:'8px', margin:'8px 0 0 0'}}>{sp.afterDesc}</p>}
+                      </div>
                     </div>
-                    <div>
-                      <p style={{margin:'0 0 6px 4px', fontSize:'13px', fontWeight:'bold', color:'var(--primary)'}}>■ 작업 후 (After)</p>
-                      <div className="feed-img-wrap" style={{height:'auto'}}><img src={sp.afterImg} style={{display:'block'}} /></div>
-                      {sp.afterDesc && <p style={{fontSize:'14px', color:'var(--text-main)', background:'#f8fafc', padding:'12px', borderRadius:'8px', margin:'8px 0 0 0'}}>{sp.afterDesc}</p>}
+                  )}
+
+                  {/* 가로 보기 */}
+                  {detailViewMode === 'horizontal' && (
+                    <div style={{display:'flex', gap:'8px'}}>
+                      <div style={{flex: 1}}>
+                        <p style={{margin:'0 0 8px 0', fontSize:'12px', fontWeight:'bold', color:'#ef4444'}}>■ Before</p>
+                        <div className="feed-img-wrap" style={{height:'180px', cursor:'zoom-in'}} onClick={() => setSelectedImage(sp.beforeImg)}><img src={sp.beforeImg} style={{height:'100%', objectFit:'cover'}} /></div>
+                        {sp.beforeDesc && <p style={{fontSize:'12px', color:'var(--text-main)', background:'#f8fafc', padding:'8px', borderRadius:'6px', margin:'8px 0 0 0', wordBreak:'keep-all'}}>{sp.beforeDesc}</p>}
+                      </div>
+                      <div style={{flex: 1}}>
+                        <p style={{margin:'0 0 8px 0', fontSize:'12px', fontWeight:'bold', color:'var(--primary)'}}>■ After</p>
+                        <div className="feed-img-wrap" style={{height:'180px', cursor:'zoom-in'}} onClick={() => setSelectedImage(sp.afterImg)}><img src={sp.afterImg} style={{height:'100%', objectFit:'cover'}} /></div>
+                        {sp.afterDesc && <p style={{fontSize:'12px', color:'var(--text-main)', background:'#f8fafc', padding:'8px', borderRadius:'6px', margin:'8px 0 0 0', wordBreak:'keep-all'}}>{sp.afterDesc}</p>}
+                      </div>
                     </div>
-                  </div>
+                  )}
+
+                  {/* 한 장 보기 (플립) */}
+                  {detailViewMode === 'flip' && (
+                    <div>
+                      <p style={{margin:'0 0 10px 0', fontSize:'12px', color:'var(--text-sub)', textAlign:'center', fontWeight:'600'}}>사진을 탭하여 전/후를 비교해보세요 👆</p>
+                      <div className={`flip-card ${flippedCards[idx] ? 'flipped' : ''}`} onClick={() => toggleFlip(idx)}>
+                        <div className="flip-card-inner">
+                          <div className="flip-card-front">
+                            <span className="img-label" style={{background:'#ef4444'}}>Before</span>
+                            <img src={sp.beforeImg} style={{width:'100%', height:'100%', objectFit:'cover'}} />
+                          </div>
+                          <div className="flip-card-back">
+                            <span className="img-label" style={{background:'var(--primary)'}}>After</span>
+                            <img src={sp.afterImg} style={{width:'100%', height:'100%', objectFit:'cover'}} />
+                          </div>
+                        </div>
+                      </div>
+                      {(sp.beforeDesc || sp.afterDesc) && (
+                        <div style={{marginTop:'12px', padding:'12px', background:'#f8fafc', borderRadius:'8px', fontSize:'13px', color:'var(--text-main)'}}>
+                          <strong style={{color: !flippedCards[idx] ? '#ef4444' : 'var(--primary)', marginRight:'6px'}}>
+                            {!flippedCards[idx] ? 'Before:' : 'After:'}
+                          </strong>
+                          {!flippedCards[idx] ? (sp.beforeDesc || '작업 전 설명이 없습니다.') : (sp.afterDesc || '작업 후 설명이 없습니다.')}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
 
@@ -871,6 +976,16 @@ export default function App() {
           <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none' }} onClick={submitFeedback}>보내기</button>
           <button className="sheet-btn cancel" onClick={() => setIsFeedbackModalOpen(false)}>취소</button>
         </div>
+      </div>
+
+      {/* 이미지 확대 모달 */}
+      <div className={`modal-overlay ${selectedImage ? 'active' : ''}`} onClick={() => setSelectedImage(null)} style={{zIndex: 1000}}>
+        {selectedImage && (
+          <div style={{width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', boxSizing: 'border-box'}}>
+            <img src={selectedImage} alt="확대된 이미지" style={{maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '8px'}} />
+            <button style={{position: 'absolute', top: '20px', right: '20px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '40px', height: '40px', fontSize: '20px', cursor: 'pointer'}}>×</button>
+          </div>
+        )}
       </div>
 
       <div className={`toast ${toastMsg.show ? 'show' : ''}`}>{toastMsg.msg}</div>
