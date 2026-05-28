@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "firebase/auth";
-import { getFirestore, collection, addDoc, doc, getDoc, query, orderBy, onSnapshot, serverTimestamp } from "firebase/firestore";
+import { getFirestore, collection, addDoc, doc, getDoc, query, onSnapshot, serverTimestamp } from "firebase/firestore";
 import { getStorage, ref, uploadString, getDownloadURL } from "firebase/storage";
 
 const firebaseConfig = {
@@ -18,6 +18,9 @@ const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 const db = getFirestore(app); 
 const storage = getStorage(app); 
+
+// Firestore 보안 규칙에 맞춘 고정 경로
+const APP_ID = 'beforeter-app';
 
 export default function App() {
   const [currentView, setCurrentView] = useState('feed'); 
@@ -43,6 +46,7 @@ export default function App() {
   const [beforeImg, setBeforeImg] = useState('');
   const [afterImg, setAfterImg] = useState('');
   const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackCategory, setFeedbackCategory] = useState('기능 관련');
   const [toastMsg, setToastMsg] = useState({ show: false, msg: '' });
 
   const [shareLocation, setShareLocation] = useState(true);
@@ -68,7 +72,8 @@ export default function App() {
         const userProfile = savedProfiles[user.uid] || {};
         setCurrentUser({ 
           id: user.uid, name: userProfile.name || user.displayName || '작업자', 
-          affiliation: userProfile.affiliation || '', profilePic: userProfile.profilePic || user.photoURL || '', provider: 'Google' 
+          affiliation: userProfile.affiliation || '', profilePic: userProfile.profilePic || user.photoURL || '', 
+          email: user.email || '', provider: 'Google' 
         });
       } else { setCurrentUser(null); }
     });
@@ -76,10 +81,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const q = query(collection(db, "reports"), orderBy("createdAt", "desc"));
+    // 보안 규칙에 맞는 경로 설정 및 Index 에러 방지를 위해 orderBy 제거
+    const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'reports'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const reports = [];
       snapshot.forEach((doc) => reports.push({ id: doc.id, ...doc.data() }));
+      
+      // 메모리 상에서 최신순(내림차순) 정렬 처리
+      reports.sort((a, b) => {
+        const timeA = a.createdAt ? (typeof a.createdAt.toMillis === 'function' ? a.createdAt.toMillis() : 0) : 0;
+        const timeB = b.createdAt ? (typeof b.createdAt.toMillis === 'function' ? b.createdAt.toMillis() : 0) : 0;
+        return timeB - timeA;
+      });
+      
       setFeedData(reports);
     }, (error) => console.error("데이터 읽기 오류:", error));
     return () => unsubscribe();
@@ -116,7 +130,8 @@ export default function App() {
         if (reportId) {
           setCurrentView('detail'); setIsDetailLoading(true);
           try {
-            const docSnap = await getDoc(doc(db, "reports", reportId));
+            // 상세 조회 경로도 규칙에 맞게 변경
+            const docSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', reportId));
             if (docSnap.exists()) setDetailReport({ id: docSnap.id, ...docSnap.data() });
             else { showToast("존재하지 않는 리포트입니다."); setCurrentView('feed'); }
           } catch (err) { showToast("오류가 발생했습니다."); setCurrentView('feed'); } 
@@ -197,7 +212,8 @@ export default function App() {
       await uploadString(beforeStorageRef, beforeImg, 'data_url'); const beforeDownloadUrl = await getDownloadURL(beforeStorageRef);
       await uploadString(afterStorageRef, afterImg, 'data_url'); const afterDownloadUrl = await getDownloadURL(afterStorageRef);
       
-      const docRef = await addDoc(collection(db, "reports"), {
+      // 보안 규칙에 맞는 경로로 데이터 저장 변경
+      const docRef = await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'reports'), {
         authorId: currentUser.id, authorName: currentUser.name || '작업자', authorAffiliation: currentUser.affiliation || '',
         authorPic: currentUser.profilePic || '', title: taskTitle, taskDate: taskDate,
         location: shareLocation ? currentLocation : '', beforeImg: beforeDownloadUrl, afterImg: afterDownloadUrl, createdAt: serverTimestamp()
@@ -216,7 +232,13 @@ export default function App() {
     try { document.execCommand('copy'); showToast("주소가 복사되었습니다!"); setTimeout(closeFinishModal, 1500); } 
     catch (err) { showToast("복사 실패"); } finally { document.body.removeChild(textarea); }
   };
-  const submitFeedback = () => { if (!feedbackText.trim()) return showToast("내용을 입력해주세요."); showToast("감사합니다! ❤️"); setIsFeedbackModalOpen(false); setFeedbackText(''); };
+  const submitFeedback = () => { 
+    if (!feedbackText.trim()) return showToast("내용을 입력해주세요."); 
+    showToast("소중한 의견 감사합니다! 답변은 이메일로 보내드릴게요. ❤️"); 
+    setIsFeedbackModalOpen(false); 
+    setFeedbackText(''); 
+    setFeedbackCategory('기능 관련');
+  };
 
   // YYYY/MM/DD 형식 포맷팅
   const formatDisplayTime = (item) => {
@@ -353,7 +375,7 @@ export default function App() {
               <li><button onClick={processLogout} style={{ color: '#ef4444' }}>🚪 로그아웃</button></li></>
           ) : (
             <><li><button onClick={() => { setIsMenuOpen(false); switchView('login'); }}>🔐 로그인 / 회원가입</button></li>
-              <li><button onClick={() => { setIsMenuOpen(false); setIsFeedbackModalOpen(true); }}>💡 개발자에게 피드백 전송</button></li></>
+              <li><button onClick={() => { setIsMenuOpen(false); checkAuthAndAction(() => setIsFeedbackModalOpen(true)); }}>💡 개발자에게 피드백 전송</button></li></>
           )}
         </ul>
       </div>
@@ -361,7 +383,7 @@ export default function App() {
       {currentView === 'feed' && (
         <div className="view-section">
           <div className="feed-container">
-            <div className="brand-hook-card"><h3>10초 완성 나만의 작업리포트 🚀</h3><p>퇴근이 빨라지는 데일리 작업 리포트 서비스 '비포터'. 사진 2장으로 오늘 마감을 완벽하게 증명해 보세요.</p></div>
+            <div className="brand-hook-card"><h3>10초 완성 나만의 작업리포트 🚀</h3><p>사진 2장으로 나를 증명하다 비포터</p></div>
             {feedData.length === 0 ? (
               <div className="empty-state">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
@@ -558,6 +580,23 @@ export default function App() {
       <div className={`modal-overlay ${isFeedbackModalOpen ? 'active' : ''}`}>
         <div className="modal-content">
           <h3 style={{ marginTop: 0, marginBottom: '12px' }}>개발자에게 피드백 전송</h3>
+          {currentUser && currentUser.email && (
+            <div style={{ fontSize: '13px', color: 'var(--text-main)', marginBottom: '12px', textAlign: 'left', background: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontWeight: '600' }}>
+              ✉️ 발신자: {currentUser.email}
+            </div>
+          )}
+          <select 
+            className="title-input" 
+            style={{ marginBottom: '12px', padding: '12px', fontSize: '14px', width: '100%', cursor: 'pointer' }}
+            value={feedbackCategory}
+            onChange={(e) => setFeedbackCategory(e.target.value)}
+          >
+            <option value="기능 관련">⚙️ 기능 관련</option>
+            <option value="오류 제보">🚨 오류 제보</option>
+            <option value="서비스 확대">🚀 서비스 확대</option>
+            <option value="디자인">🎨 디자인</option>
+            <option value="기타">💬 기타</option>
+          </select>
           <textarea className="feedback-textarea" placeholder="자유롭게 적어주세요!" value={feedbackText} onChange={(e) => setFeedbackText(e.target.value)}></textarea>
           <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none' }} onClick={submitFeedback}>보내기</button>
           <button className="sheet-btn cancel" onClick={() => setIsFeedbackModalOpen(false)}>취소</button>
