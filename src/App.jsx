@@ -669,6 +669,16 @@ export default function App() {
         text: feedbackText, 
         createdAt: serverTimestamp()
       });
+
+      // Firebase 확장 프로그램 이메일 큐에 추가
+      await addDoc(collection(db, 'nealjin29@gmail.com'), {
+        to: 'jinthemoon@kakao.com',
+        message: {
+          subject: `[비포터] 💡 새로운 피드백 접수: ${feedbackCategory}`,
+          text: `작성자: ${currentUser?.name || '익명'}\n이메일: ${currentUser?.email || '없음'}\n카테고리: ${feedbackCategory}\n\n내용:\n${feedbackText}`
+        }
+      });
+
       showToast("소중한 의견 감사합니다! 이메일로 답변 드릴게요. ❤️"); 
       setIsFeedbackModalOpen(false); 
       setFeedbackText(''); 
@@ -681,8 +691,6 @@ export default function App() {
   const handleOpenNoti = () => {
     if(!currentUser) return showToast("로그인 후 이용 가능합니다.");
     setIsNotiModalOpen(true);
-    
-    // 알림 읽음 처리는 별도의 버튼(모두 읽음)으로 하거나 열때 처리할 수 있음
   };
 
   const markAllNotisAsRead = async () => {
@@ -717,6 +725,16 @@ export default function App() {
         reason: reportReason, 
         createdAt: serverTimestamp()
       });
+
+      // Firebase 확장 프로그램 이메일 큐에 추가
+      await addDoc(collection(db, 'nealjin29@gmail.com'), {
+        to: 'jinthemoon@kakao.com',
+        message: {
+          subject: `[비포터] 🚨 새로운 게시물 신고 접수`,
+          text: `신고자 ID: ${currentUser.id}\n신고자 이름: ${currentUser.name}\n신고된 게시물 ID: ${postOptionsMenu.reportId}\n\n신고 사유:\n${reportReason}`
+        }
+      });
+
       showToast("신고가 접수되었습니다. 관리자 검토 후 조치됩니다.");
       setIsReportPostModalOpen(false); 
       setReportReason(''); 
@@ -1436,7 +1454,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 리포트 관리(수정/삭제) 모달 신규 추가 */}
+      {/* 리포트 관리(수정/삭제) 모달 */}
       <div className={`modal-overlay ${isEditModalOpen ? 'active' : ''}`}>
         <div className="modal-content" style={{ padding: '24px 20px', width: '90%' }}>
           <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>리포트 관리</h3>
@@ -1457,7 +1475,7 @@ export default function App() {
         </div>
       </div>
       
-      {/* 프로필 수정 모달 항목 추가/개선 */}
+      {/* 프로필 수정 모달 */}
       <div className={`modal-overlay ${isProfileModalOpen ? 'active' : ''}`}>
         <div className="modal-content" style={{ padding: '24px 20px', width: '100%', maxHeight:'85vh', overflowY:'auto' }}>
           <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>프로필 편집</h3>
@@ -1493,7 +1511,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* 알림 모달 신규 추가 */}
+      {/* 알림 모달 */}
       <div className={`modal-overlay ${isNotiModalOpen ? 'active' : ''}`}>
         <div className="modal-content" style={{maxHeight:'80vh', overflowY:'auto'}}>
           <h3 style={{ marginTop: 0, marginBottom: '20px', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>🔔 알림센터</h3>
