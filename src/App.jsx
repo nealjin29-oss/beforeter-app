@@ -671,7 +671,7 @@ export default function App() {
       });
 
       // Firebase 확장 프로그램 이메일 큐에 추가
-      await addDoc(collection(db, 'nealjin29@gmail.com'), {
+      await addDoc(collection(db, 'mail'), {
         to: 'jinthemoon@kakao.com',
         message: {
           subject: `[비포터] 💡 새로운 피드백 접수: ${feedbackCategory}`,
@@ -727,7 +727,7 @@ export default function App() {
       });
 
       // Firebase 확장 프로그램 이메일 큐에 추가
-      await addDoc(collection(db, 'nealjin29@gmail.com'), {
+      await addDoc(collection(db, 'mail'), {
         to: 'jinthemoon@kakao.com',
         message: {
           subject: `[비포터] 🚨 새로운 게시물 신고 접수`,
