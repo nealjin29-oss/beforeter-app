@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from "firebase/app";
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "firebase/auth";
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "firebase/auth";
 import { getFirestore, collection, addDoc, doc, getDoc, setDoc, query, onSnapshot, serverTimestamp, updateDoc, deleteDoc, where } from "firebase/firestore";
 import { getStorage, ref, uploadString, getDownloadURL } from "firebase/storage";
 
@@ -43,13 +43,12 @@ export default function App() {
   };
   const [blockedUsers, setBlockedUsers] = useState(getInitialBlocked());
   
-  // 모달 및 바텀시트 상태
   const [isPhotoSheetOpen, setIsPhotoSheetOpen] = useState(false);
   const [currentPhotoTarget, setCurrentPhotoTarget] = useState(null); 
   const [isFinishModalOpen, setIsFinishModalOpen] = useState(false);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
-  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false); 
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false); 
+  const [isTierModalOpen, setIsTierModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isNotiModalOpen, setIsNotiModalOpen] = useState(false);
   const [postOptionsMenu, setPostOptionsMenu] = useState(null); 
@@ -83,16 +82,17 @@ export default function App() {
   const [taskTitle, setTaskTitle] = useState('');
   const [taskCategory, setTaskCategory] = useState('기타');
   const [uploadMode, setUploadMode] = useState('single'); 
-  const [isPrivateUpload, setIsPrivateUpload] = useState(false); // 5번 기능: 비공개 저장 상태
+  const [isPrivateUpload, setIsPrivateUpload] = useState(false); 
   const defaultSpace = { id: 1, spaceName: '', beforeImg: '', afterImg: '', desc: '' };
   const [spaces, setSpaces] = useState([{...defaultSpace}]);
   
-  // 피드백 및 기타 상태
   const [feedbackText, setFeedbackText] = useState('');
   const [feedbackCategory, setFeedbackCategory] = useState('기능 관련');
   const [toastMsg, setToastMsg] = useState({ show: false, msg: '' });
   const [shareLocation, setShareLocation] = useState(true);
   const [currentLocation, setCurrentLocation] = useState('위치 파악 중...');
+  
+  // 회원가입 약관 동의 상태
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState(false);
   
@@ -103,7 +103,6 @@ export default function App() {
   const [editIntro, setEditIntro] = useState('');
   const [editKeywords, setEditKeywords] = useState('');
 
-  // 디테일 뷰 상태
   const [latestReportId, setLatestReportId] = useState('');
   const [detailReport, setDetailReport] = useState(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
@@ -123,11 +122,50 @@ export default function App() {
   const galleryInputRef = useRef(null);
   const profilePicRef = useRef(null);
 
-  // 인증 및 유저 데이터 구독
+  useEffect(() => {
+    const handleRouting = async (path, isPop = false) => {
+        if (path === '/' || path === '') {
+            setCurrentView('feed');
+        } else if (path.startsWith('/report/')) {
+            const rid = path.split('/report/')[1];
+            if(rid) {
+                setCurrentView('detail');
+                setIsDetailLoading(true);
+                try {
+                    const docSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', rid));
+                    if(docSnap.exists()) setDetailReport({ id: docSnap.id, ...docSnap.data() });
+                    else { showToast("존재하지 않는 리포트입니다."); setCurrentView('feed'); }
+                } catch(e) { showToast("오류가 발생했습니다."); setCurrentView('feed'); }
+                finally { setIsDetailLoading(false); }
+            }
+        } else if (path.startsWith('/profile/')) {
+            const uid = path.split('/profile/')[1];
+            if(uid) {
+                setCurrentView('public-profile');
+                setIsDetailLoading(true);
+                try {
+                    const userSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'users', uid));
+                    if(userSnap.exists()) setPublicProfileUser(userSnap.data());
+                    else setPublicProfileUser({ id: uid, name: '알 수 없는 사용자', intro: '', keywords: [] });
+                } catch(e) { showToast("오류가 발생했습니다."); setCurrentView('feed'); }
+                finally { setIsDetailLoading(false); }
+            }
+        }
+    };
+
+    // 최초 로드 시 라우팅 실행
+    handleRouting(window.location.pathname);
+
+    // 뒤로가기/앞으로가기 브라우저 이벤트 감지
+    const popStateHandler = () => handleRouting(window.location.pathname, true);
+    window.addEventListener('popstate', popStateHandler);
+    return () => window.removeEventListener('popstate', popStateHandler);
+  }, []);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // 프로필 정보 연동
+        // 프로필 정보 연동 및 DB 등록 (최초 회원가입 시 자동 저장)
         const userRef = doc(db, 'artifacts', APP_ID, 'public', 'users', user.uid);
         const userSnap = await getDoc(userRef);
         let userData = {
@@ -144,6 +182,7 @@ export default function App() {
         if (userSnap.exists()) {
           userData = { ...userData, ...userSnap.data(), id: user.uid };
         } else {
+          // 신규 유저 DB 생성
           await setDoc(userRef, userData);
         }
         setCurrentUser(userData);
@@ -175,7 +214,6 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 피드 목록 실시간 동기화
   useEffect(() => {
     const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'reports'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -193,7 +231,6 @@ export default function App() {
     return () => unsubscribe();
   }, [detailReport]);
 
-  // GPS 위치 연동
   useEffect(() => {
     if (currentView === 'upload' && shareLocation) {
       setCurrentLocation('현재 위치 찾는 중 📍...');
@@ -218,14 +255,14 @@ export default function App() {
     }
   }, [currentView, shareLocation]);
 
-  // 공통 헬퍼 함수
   const showToast = (msg) => { 
     setToastMsg({ show: true, msg }); 
     setTimeout(() => setToastMsg({ show: false, msg: '' }), 3000); 
   };
   
   const switchView = (view) => { 
-    if (view === 'feed' && window.location.pathname.includes('/report/')) {
+    // 피드로 돌아갈 때 URL 초기화
+    if (view === 'feed' && (window.location.pathname.includes('/report/') || window.location.pathname.includes('/profile/'))) {
       window.history.pushState({}, '', '/'); 
     }
     setCurrentView(view); 
@@ -247,18 +284,15 @@ export default function App() {
     setConfirmDialog({ show: true, msg, onConfirm: () => { action(); setConfirmDialog({show: false, msg:'', onConfirm:null}); } });
   };
 
-  const handleLoginClick = () => { 
-    setTermsAgreed(false); 
-    setPrivacyAgreed(false); 
-    setIsTermsModalOpen(true); 
-  };
-
   const processLogin = async () => {
-    if (!termsAgreed || !privacyAgreed) return showToast("약관에 동의해주세요.");
+    if (!termsAgreed || !privacyAgreed) {
+        return showToast("서비스 이용약관 및 개인정보 수집에 동의해주세요.");
+    }
     try { 
-      setIsTermsModalOpen(false); 
+      // 강력한 세션 유지 옵션 (브라우저 로컬 저장)
+      await setPersistence(auth, browserLocalPersistence);
       await signInWithPopup(auth, provider); 
-      showToast(`로그인 되었습니다.`); 
+      showToast(`환영합니다! 로그인이 완료되었습니다.`); 
       switchView('feed'); 
     } catch (error) { 
       showToast("로그인에 실패했습니다."); 
@@ -285,7 +319,6 @@ export default function App() {
     setIsProfileModalOpen(true); 
   };
 
-  // 이미지 압축 유틸리티
   const resizeAndCompressImage = (file, callback, maxWidth = 800) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -383,7 +416,6 @@ export default function App() {
     setSpaces(newSpaces); 
   };
 
-  // 리포트 생성 (5번 기능: 비공개 여부 반영)
   const saveAndShareReport = async () => {
     if (!taskTitle || !taskDate) return showToast("작업 일자와 제목을 입력해주세요!");
     if (spaces.some(sp => !sp.beforeImg || !sp.afterImg)) return showToast("모든 공간의 Before/After 사진을 첨부해주세요!");
@@ -437,7 +469,7 @@ export default function App() {
     }
   };
 
-  const openDetailView = async (reportId) => {
+  const openDetailView = async (reportId, isInitial = false) => {
     setCurrentView('detail'); 
     setIsDetailLoading(true); 
     setDetailViewMode('horizontal'); 
@@ -447,7 +479,7 @@ export default function App() {
       const docSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', reportId));
       if (docSnap.exists()) {
         setDetailReport({ id: docSnap.id, ...docSnap.data() });
-        window.history.pushState({}, '', '/report/' + reportId);
+        if(!isInitial) window.history.pushState({}, '', '/report/' + reportId);
       } else { 
         showToast("존재하지 않는 리포트입니다."); 
         switchView('feed'); 
@@ -513,6 +545,21 @@ export default function App() {
       document.body.removeChild(textarea); 
     }
   };
+  
+  const copyProfileLink = (id) => {
+    const textarea = document.createElement('textarea'); 
+    textarea.value = `https://www.beforeter.com/profile/${id}`;
+    document.body.appendChild(textarea); 
+    textarea.select();
+    try { 
+      document.execCommand('copy'); 
+      showToast("오픈 프로필 주소가 복사되었습니다!"); 
+    } catch (err) { 
+      showToast("복사 실패"); 
+    } finally { 
+      document.body.removeChild(textarea); 
+    }
+  };
 
   const submitComment = async () => {
     if (!commentInput.trim()) return;
@@ -551,9 +598,8 @@ export default function App() {
     }
   };
 
-  // 3번 기능: 좋아요 공통 로직 (피드 및 상세 뷰에서 모두 호출 가능)
   const handleToggleLike = async (report, e) => {
-    if (e) e.stopPropagation(); // 카드 클릭(상세 이동) 방지
+    if (e) e.stopPropagation(); 
     if (!currentUser) return showToast("로그인 후 이용 가능합니다.");
     
     const isLiked = report.likes?.includes(currentUser.id);
@@ -569,7 +615,6 @@ export default function App() {
         const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', report.id);
         await updateDoc(docRef, { likes: newLikes });
         
-        // 상세 뷰를 보고 있다면 실시간으로 반영하기 위해 상태 업데이트 (onSnapshot이 있지만 즉각적인 UI 반영을 위해)
         if (detailReport && detailReport.id === report.id) {
            setDetailReport(prev => ({ ...prev, likes: newLikes }));
         }
@@ -608,7 +653,6 @@ export default function App() {
     }
   };
 
-  // 알림 열기
   const handleOpenNoti = () => {
     if(!currentUser) return showToast("로그인 후 이용 가능합니다.");
     setIsNotiModalOpen(true);
@@ -620,7 +664,6 @@ export default function App() {
     });
   };
 
-  // 버그 수정: 선언 누락되었던 markAllNotisAsRead 복원
   const markAllNotisAsRead = async () => {
     notifications.forEach(async (noti) => {
       if(!noti.isRead) {
@@ -660,24 +703,28 @@ export default function App() {
     }
   };
 
-  // 6번 기능: 타인 프로필 보기 (모달 대신 전용 뷰로 이동)
-  const showPublicProfile = async (authorId) => {
-    if(currentUser && currentUser.id === authorId) { 
+  const showPublicProfile = async (authorId, isInitial = false) => {
+    // 내 프로필이면 마이페이지로 스위치 (URL 접근이 아닌 일반 접근 시)
+    if(currentUser && currentUser.id === authorId && !isInitial) { 
       switchView('mypage'); 
       return; 
     }
     
+    setIsDetailLoading(true);
     try {
       const userSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'users', authorId));
       if(userSnap.exists()) { 
         setPublicProfileUser(userSnap.data()); 
-        switchView('public-profile'); // 전용 뷰로 이동
       } else { 
-        setPublicProfileUser({ id: authorId, name: '알 수 없는 사용자', intro: '', keywords: [] }); 
-        switchView('public-profile');
+        // 아직 세팅하지 않은 유저도 기본 오픈 프로필 페이지가 보장되도록 설정
+        setPublicProfileUser({ id: authorId, name: '작업자', intro: '아직 자기소개를 등록하지 않았습니다.', keywords: [], profilePic: '' }); 
       }
+      setCurrentView('public-profile');
+      if(!isInitial) window.history.pushState({}, '', '/profile/' + authorId);
     } catch(e) { 
       showToast("프로필을 불러오지 못했습니다."); 
+    } finally {
+      setIsDetailLoading(false);
     }
   };
 
@@ -691,7 +738,7 @@ export default function App() {
     setFlippedCards(prev => ({ ...prev, [idx]: !prev[idx] }));
   };
 
-  // 4번 기능: 기존 데이터(카테고리 없는 경우) '기타'로 취급하여 필터링
+  // 피드 필터: 차단 제외 및 공개 설정만 (기존 데이터의 category 누락 시 '기타' 분류)
   const publicFeeds = feedData.filter(f => f.status === 'public' && !blockedUsers.includes(f.authorId));
   const displayedFeeds = feedFilter === '전체' 
     ? publicFeeds 
@@ -729,6 +776,8 @@ export default function App() {
           background-color: #ffffff; 
           box-shadow: 0 0 20px rgba(0,0,0,0.05); 
           position: relative; 
+          display: flex;
+          flex-direction: column;
         }
         
         .app-header { 
@@ -770,7 +819,7 @@ export default function App() {
         
         .view-section { 
           padding-bottom: 90px; 
-          min-height: calc(100vh - 56px); 
+          flex: 1;
           box-sizing: border-box; 
           background: #ffffff;
         }
@@ -793,7 +842,6 @@ export default function App() {
         .brand-hook-card h3 { margin: 0 0 6px 0; font-size: 18px; font-weight: 800; }
         .brand-hook-card p { margin: 0; font-size: 13px; opacity: 0.9; line-height: 1.4; }
         
-        /* 2번 기능: 카테고리 필터 스크롤 및 여백 개선 */
         .filter-scroll { 
           display: flex; 
           gap: 8px; 
@@ -913,8 +961,9 @@ export default function App() {
           width: 100%; max-width: 320px; padding: 16px; border-radius: 12px; 
           font-size: 16px; font-weight: 700; cursor: pointer; border: 1px solid #cbd5e1; 
           display: flex; align-items: center; justify-content: center; gap: 12px; 
-          background: white; margin-bottom: 12px; 
+          background: white; margin-bottom: 12px; transition: background 0.2s;
         }
+        .social-btn:hover { background: #f8fafc; }
         
         .input-group { margin-bottom: 24px; text-align: left; }
         .title-label { display: block; font-size: 15px; font-weight: 700; color: var(--text-main); margin-bottom: 10px; }
@@ -982,7 +1031,6 @@ export default function App() {
         }
         .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
 
-        /* 체크박스 디자인 */
         .checkbox-label {
           display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600;
           color: var(--text-main); cursor: pointer; padding: 16px; background: #f8fafc;
@@ -993,13 +1041,14 @@ export default function App() {
         }
       `}</style>
       
+      {}
       <div style={{ position: 'absolute', width: '1px', height: '1px', padding: 0, margin: '-1px', overflow: 'hidden', clip: 'rect(0,0,0,0)', border: 0 }}>
         <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} />
         <input type="file" accept="image/*" ref={galleryInputRef} onChange={handleFileSelect} />
         <input type="file" accept="image/*" ref={profilePicRef} onChange={handleProfilePicSelect} />
       </div>
 
-      {/* 헤더 바 */}
+      {}
       <header className="app-header">
         <button className="header-icon" onClick={toggleMenu}>
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1011,7 +1060,7 @@ export default function App() {
         
         <div className="header-title" onClick={() => switchView('feed')}>비포터</div>
         
-        {/* 1번 기능: 심플한 종 모양 SVG 아이콘 적용 */}
+        {/* 심플하고 모던한 검은색 선 기반 종 모양 아이콘 적용 */}
         <button className="header-icon" onClick={handleOpenNoti}>
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1e293b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
@@ -1021,64 +1070,69 @@ export default function App() {
         </button>
       </header>
 
-      {/* 좌측 슬라이드 사이드바 */}
+      {}
       <div className={`sidebar-overlay ${isMenuOpen ? 'active' : ''}`} onClick={toggleMenu}></div>
       <div className={`sidebar ${isMenuOpen ? 'active' : ''}`}>
-        <div className="sidebar-header" style={{padding:'30px 20px', background:'var(--primary-light)', borderBottom:'1px solid #bae6fd'}}>
-          {currentUser ? (
-            <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
-              <div style={{width:'48px', height:'48px', background:'white', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'20px', fontWeight:'bold', color:'var(--primary)', overflow:'hidden'}}>
-                {currentUser.profilePic ? (
-                  <img src={currentUser.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} alt="프로필" />
-                ) : (
-                  (currentUser.name || '작업자').charAt(0)
-                )}
-              </div>
-              <div>
-                <h2 style={{margin:0, color:'var(--primary-hover)', fontSize:'18px', fontWeight:800}}>{currentUser.name}</h2>
-              </div>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <div className="sidebar-header" style={{padding:'30px 20px', background:'var(--primary-light)', borderBottom:'1px solid #bae6fd'}}>
+              {currentUser ? (
+                <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
+                  <div style={{width:'48px', height:'48px', background:'white', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'20px', fontWeight:'bold', color:'var(--primary)', overflow:'hidden'}}>
+                    {currentUser.profilePic ? (
+                      <img src={currentUser.profilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} alt="프로필" />
+                    ) : (
+                      (currentUser.name || '작업자').charAt(0)
+                    )}
+                  </div>
+                  <div>
+                    <h2 style={{margin:0, color:'var(--primary-hover)', fontSize:'18px', fontWeight:800}}>{currentUser.name}</h2>
+                  </div>
+                </div>
+              ) : (
+                <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
+                  <div style={{width:'48px', height:'48px', background:'white', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'20px', fontWeight:'bold', color:'#cbd5e1'}}>?</div>
+                  <div>
+                    <h2 style={{margin:0, color:'#94a3b8', fontSize:'18px', fontWeight:800}}>비포터</h2>
+                    <p style={{margin:0, fontSize:'13px', color:'var(--text-sub)'}}>로그인 후 이용해보세요</p>
+                  </div>
+                </div>
+              )}
             </div>
-          ) : (
-            <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
-              <div style={{width:'48px', height:'48px', background:'white', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'20px', fontWeight:'bold', color:'#cbd5e1'}}>?</div>
-              <div>
-                <h2 style={{margin:0, color:'#94a3b8', fontSize:'18px', fontWeight:800}}>비포터</h2>
-                <p style={{margin:0, fontSize:'13px', color:'var(--text-sub)'}}>로그인 후 이용해보세요</p>
-              </div>
-            </div>
-          )}
-        </div>
-        
-        <ul style={{listStyle:'none', padding:0, margin:0, flex:1}}>
-          <li style={{borderBottom:'1px solid #f1f5f9'}}>
-            <button onClick={() => { setIsMenuOpen(false); switchView('feed'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>🏠 피드 홈</button>
-          </li>
-          {currentUser ? (
-            <>
+            
+            <ul style={{listStyle:'none', padding:0, margin:0, flex:1}}>
               <li style={{borderBottom:'1px solid #f1f5f9'}}>
-                <button onClick={() => { setIsMenuOpen(false); switchView('mypage'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>👤 마이페이지 (내 리포트)</button>
+                <button onClick={() => { setIsMenuOpen(false); switchView('feed'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>🏠 피드 홈</button>
               </li>
+              {/* 추가된 서비스 소개 메뉴 */}
+              <li style={{borderBottom:'1px solid #f1f5f9'}}>
+                <button onClick={() => { setIsMenuOpen(false); switchView('about'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>📖 서비스 소개</button>
+              </li>
+              {currentUser && (
+                <li style={{borderBottom:'1px solid #f1f5f9'}}>
+                  <button onClick={() => { setIsMenuOpen(false); switchView('mypage'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>👤 마이페이지 (내 리포트)</button>
+                </li>
+              )}
               <li style={{borderBottom:'1px solid #f1f5f9'}}>
                 <button onClick={() => { setIsMenuOpen(false); setIsFeedbackModalOpen(true); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>💡 개발자에게 피드백 전송</button>
               </li>
-              <li>
-                <button onClick={processLogout} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'#ef4444', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>🚪 로그아웃</button>
-              </li>
-            </>
-          ) : (
-            <>
-              <li style={{borderBottom:'1px solid #f1f5f9'}}>
-                <button onClick={() => { setIsMenuOpen(false); switchView('login'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>🔐 로그인 / 회원가입</button>
-              </li>
-              <li>
-                <button onClick={() => { setIsMenuOpen(false); checkAuthAndAction(() => setIsFeedbackModalOpen(true)); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>💡 개발자에게 피드백 전송</button>
-              </li>
-            </>
-          )}
-        </ul>
+            </ul>
+            
+            {/* 로그인/로그아웃 버튼은 좌측 메뉴 최하단에 배치 */}
+            <ul style={{listStyle:'none', padding:0, margin:0, borderTop:'1px solid #e2e8f0', background:'#f8fafc'}}>
+              {currentUser ? (
+                <li>
+                  <button onClick={processLogout} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'#ef4444', fontSize:'15px', fontWeight:700, cursor:'pointer'}}>🚪 로그아웃</button>
+                </li>
+              ) : (
+                <li>
+                  <button onClick={() => { setIsMenuOpen(false); switchView('login'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'15px', fontWeight:700, cursor:'pointer'}}>🔐 로그인 / 회원가입</button>
+                </li>
+              )}
+            </ul>
+        </div>
       </div>
 
-      {/* 뷰: 메인 피드 */}
+      {}
       {currentView === 'feed' && (
         <div className="view-section">
           <div className="feed-container" style={{paddingBottom:0}}>
@@ -1128,8 +1182,10 @@ export default function App() {
                         )}
                       </div>
                       <div>
-                        {/* 4번 기능: 기존 카테고리 없던 항목 '기타' 처리 표시 */}
-                        {item.authorName || '작업자'} <span style={{fontSize:'12px', color:'var(--primary)', fontWeight:'bold'}}>[{item.category || '기타'}]</span>
+                        {/* 프로필 조회 이벤트 바인딩 */}
+                        <span onClick={(e) => {e.stopPropagation(); showPublicProfile(item.authorId);}} style={{cursor:'pointer'}}>
+                            {item.authorName || '작업자'} <span style={{fontSize:'12px', color:'var(--primary)', fontWeight:'bold'}}>[{item.category || '기타'}]</span>
+                        </span>
                         <p className="author-time">{formatDisplayTime(item)}</p>
                       </div>
                     </div>
@@ -1146,7 +1202,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* 3번 기능: 피드 밖에서도 좋아요/댓글 수 보이고 바로 좋아요 가능 */}
+                    {/* 피드 밖에서도 좋아요와 댓글 수를 보고 상호작용 가능 */}
                     <div style={{display:'flex', gap:'16px', fontSize:'13px', color:'var(--text-sub)', marginTop:'16px', fontWeight:'600'}}>
                         <button 
                           className="action-btn"
@@ -1177,25 +1233,67 @@ export default function App() {
         </div>
       )}
 
-      {/* 뷰: 로그인 */}
+      {}
       {currentView === 'login' && (
-        <div className="view-section" style={{ display:'flex' }}>
+        <div className="view-section" style={{ display:'flex', background:'white' }}>
           <div className="login-container" style={{ width:'100%' }}>
             <div className="login-logo">B</div>
-            <h1>비포터 시작하기</h1>
-            <p>1분만에 가입하고 신뢰를 공유하세요</p>
+            <h1 style={{margin:'0 0 8px 0', color:'var(--text-main)', fontSize:'24px', fontWeight:'800'}}>비포터 시작하기</h1>
+            <p style={{margin:'0 0 32px 0', color:'var(--text-sub)', fontSize:'14px'}}>1분 만에 가입하고 신뢰를 공유하세요</p>
             
-            <button className="social-btn" onClick={handleLoginClick}>
+            {/* 회원가입 절차 (동의 박스) */}
+            <div className="terms-box" style={{textAlign:'left', background:'#f8fafc', padding:'16px 20px', borderRadius:'16px', width:'100%', maxWidth:'320px', marginBottom:'24px', border:'1px solid #e2e8f0', boxSizing:'border-box'}}>
+               <label style={{display:'flex', alignItems:'center', fontWeight:'800', color:'var(--text-main)', marginBottom:'12px', cursor:'pointer', fontSize:'15px'}}>
+                 <input type="checkbox" checked={termsAgreed && privacyAgreed} onChange={(e)=>{setTermsAgreed(e.target.checked); setPrivacyAgreed(e.target.checked)}} style={{marginRight:'10px', width:'20px', height:'20px', accentColor:'var(--primary)'}} />
+                 전체 약관 동의 (회원가입)
+               </label>
+               <hr style={{borderTop:'1px solid #cbd5e1', marginBottom:'12px', borderBottom:'none'}}/>
+               <div style={{display:'flex', flexDirection:'column', gap:'12px', fontSize:'13px', color:'var(--text-sub)'}}>
+                 <label style={{display:'flex', alignItems:'center', cursor:'pointer'}}><input type="checkbox" checked={termsAgreed} onChange={e=>setTermsAgreed(e.target.checked)} style={{marginRight:'8px', accentColor:'var(--primary)'}} /> (필수) 서비스 이용약관 동의</label>
+                 <label style={{display:'flex', alignItems:'center', cursor:'pointer'}}><input type="checkbox" checked={privacyAgreed} onChange={e=>setPrivacyAgreed(e.target.checked)} style={{marginRight:'8px', accentColor:'var(--primary)'}} /> (필수) 개인정보 수집 및 이용 동의</label>
+               </div>
+            </div>
+
+            <button className="social-btn" onClick={processLogin}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M22 12c0-.82-.07-1.61-.2-2.38H12v4.5h5.68a5.4 5.4 0 0 1-2.34 3.55v2.95h3.79C21.34 18.57 22 15.55 22 12z"/>
               </svg>
-              Google 계정으로 시작하기
+              Google 계정으로 계속하기
             </button>
+            <p style={{fontSize:'12px', color:'#94a3b8', marginTop:'16px'}}>구글 계정 연동 시 회원가입이 자동으로 진행됩니다.</p>
           </div>
         </div>
       )}
 
-      {/* 뷰: 마이페이지 */}
+      {}
+      {currentView === 'about' && (
+        <div className="view-section" style={{background:'#ffffff', padding:'40px 20px', textAlign:'center'}}>
+            <div style={{width:'80px', height:'80px', background:'var(--primary)', borderRadius:'20px', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:'40px', fontWeight:'bold', margin:'0 auto 20px auto', boxShadow:'0 10px 20px rgba(20,184,166,0.3)'}}>B</div>
+            <h1 style={{fontSize:'24px', fontWeight:'800', color:'var(--text-main)', marginBottom:'12px'}}>비포터 (Beforeter)</h1>
+            <p style={{fontSize:'15px', color:'var(--text-sub)', lineHeight:'1.6', marginBottom:'40px'}}>단 2장의 사진으로 당신의 전문성을 증명하세요.<br/>고객의 신뢰를 얻는 가장 완벽한 작업 리포트 플랫폼</p>
+
+            <div style={{textAlign:'left', display:'flex', flexDirection:'column', gap:'16px'}}>
+                <div style={{background:'#f8fafc', padding:'20px', borderRadius:'16px', border:'1px solid #e2e8f0'}}>
+                    <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--primary)', display:'flex', alignItems:'center', gap:'8px'}}>⚡ 10초 완성 리포트</h3>
+                    <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.5'}}>작업 전/후 사진만 올리면 깔끔하고 전문적인 리포트가 자동으로 생성됩니다.</p>
+                </div>
+                <div style={{background:'#f8fafc', padding:'20px', borderRadius:'16px', border:'1px solid #e2e8f0'}}>
+                    <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--primary)', display:'flex', alignItems:'center', gap:'8px'}}>🔗 간편한 URL 공유</h3>
+                    <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.5'}}>작업 완료 후 카카오톡으로 링크 하나만 보내면, 고객이 바로 결과를 확인할 수 있습니다.</p>
+                </div>
+                <div style={{background:'#f8fafc', padding:'20px', borderRadius:'16px', border:'1px solid #e2e8f0'}}>
+                    <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--primary)', display:'flex', alignItems:'center', gap:'8px'}}>👤 나만의 오픈 프로필</h3>
+                    <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.5'}}>그동안 올린 리포트가 내 프로필에 쌓여, 자연스럽게 나의 실력을 증명하는 포트폴리오가 됩니다.</p>
+                </div>
+            </div>
+
+            <button className="submit-btn" style={{marginTop:'40px'}} onClick={() => switchView(currentUser ? 'feed' : 'login')}>
+                {currentUser ? '피드로 돌아가기' : '지금 바로 시작하기'}
+            </button>
+        </div>
+      )}
+
+      {}
       {currentView === 'mypage' && currentUser && (
         <div className="view-section">
           <div className="mypage-header" style={{background: '#f8fafc', padding: '30px 20px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', position: 'relative'}}>
@@ -1263,7 +1361,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 6번 기능: 타인 공개 프로필 전용 뷰 (팝업 모달에서 화면 뷰로 승격) */}
+      {}
       {currentView === 'public-profile' && publicProfileUser && (
         <div className="view-section">
           <div style={{background: '#f8fafc', padding: '20px 20px 30px 20px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', position: 'relative'}}>
@@ -1300,6 +1398,13 @@ export default function App() {
                 <span style={{fontSize: '13px', color: 'var(--text-sub)'}}>공개된 리포트</span>
               </div>
             </div>
+            
+            {/* 프로필 주소 링크 복사 기능 */}
+            <button 
+                onClick={() => copyProfileLink(publicProfileUser.id)}
+                style={{background:'white', color:'var(--text-main)', border:'1px solid #cbd5e1', padding:'8px 20px', borderRadius:'20px', fontSize:'13px', fontWeight:'700', marginTop:'24px', cursor:'pointer', display:'inline-flex', alignItems:'center', gap:'6px'}}>
+                🔗 오픈 프로필 링크 복사
+            </button>
           </div>
           
           <div className="feed-container">
@@ -1330,7 +1435,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 뷰: 리포트 업로드 (작성 화면) */}
+      {}
       {currentView === 'upload' && (
         <div className="view-section">
           <div className="upload-container" style={{padding:'24px 20px'}}>
@@ -1398,11 +1503,13 @@ export default function App() {
               <button className="sheet-btn" style={{borderStyle:'dashed'}} onClick={addSpace}>+ 공간 추가하기</button>
             )}
 
-            {/* 5번 기능: 비공개로 저장하기 옵션 하단 배치 */}
-            <label className="checkbox-label">
-              <input type="checkbox" checked={isPrivateUpload} onChange={(e) => setIsPrivateUpload(e.target.checked)} />
-              이 리포트를 비공개로 저장합니다 (링크 복사로만 공유 가능)
-            </label>
+            {/* 비공개 저장하기 옵션 하단 배치 */}
+            <div style={{marginTop: '32px', marginBottom: '8px'}}>
+                <label className="checkbox-label" style={{margin:0}}>
+                  <input type="checkbox" checked={isPrivateUpload} onChange={(e) => setIsPrivateUpload(e.target.checked)} />
+                  이 리포트를 비공개로 저장 (링크 있는 사람만 열람)
+                </label>
+            </div>
 
             <button className="submit-btn" onClick={saveAndShareReport} disabled={isUploading}>
               {isUploading ? "클라우드 저장 중..." : "완료 및 공유하기"}
@@ -1411,7 +1518,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 뷰: 디테일(상세 뷰) */}
+      {}
       {currentView === 'detail' && detailReport && (
         <div className="view-section" style={{paddingTop: '20px'}}>
           <div className="feed-container">
@@ -1440,7 +1547,7 @@ export default function App() {
                     <p style={{fontSize:'12px', color:'var(--text-sub)', margin:0}}>{formatDisplayTime(detailReport)}</p>
                   </div>
                 </div>
-                {/* 6번 기능 연동: 누르면 public-profile 뷰로 이동 */}
+                {/* 타인 프로필 보기 (링크 공유 가능) */}
                 <button onClick={() => showPublicProfile(detailReport.authorId)} style={{background:'#f1f5f9', color:'var(--text-main)', border:'none', padding:'6px 12px', borderRadius:'16px', fontSize:'12px', fontWeight:'700', cursor:'pointer'}}>프로필 보기</button>
               </div>
               
@@ -1521,9 +1628,9 @@ export default function App() {
             <button className="submit-btn" style={{background:'var(--primary)', marginTop:0}} onClick={() => copyLink(detailReport.id)}>🔗 이 리포트 링크 복사</button>
             <button className="submit-btn" style={{background:'white', color:'var(--text-main)', border:'1px solid #cbd5e1', marginTop:'12px'}} onClick={() => switchView('feed')}>목록으로 돌아가기</button>
             
-            <div className="comment-section" style={{marginTop: '24px'}}>
-              {/* 7번 기능: 상세 뷰에서 좋아요 버튼과 댓글 카운트 나란히 배치 */}
-              <div style={{display:'flex', alignItems:'center', gap:'16px', marginBottom:'16px'}}>
+            <div className="comment-section" style={{marginTop: '32px'}}>
+              {/* 댓글과 좋아요 버튼 나란히 배치 */}
+              <div style={{display:'flex', alignItems:'center', gap:'16px', marginBottom:'20px'}}>
                   <h3 style={{fontSize:'16px', margin:0}}>💬 댓글 {(detailReport.comments || []).length}</h3>
                   <button 
                     onClick={(e) => handleToggleLike(detailReport, e)} 
@@ -1571,7 +1678,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 모달 영역들 */}
+      {}
       
       {/* 프로필 수정 모달 */}
       <div className={`modal-overlay ${isProfileModalOpen ? 'active' : ''}`}>
@@ -1604,31 +1711,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* 1번 기능: 알림 모달 */}
-      <div className={`modal-overlay ${isNotiModalOpen ? 'active' : ''}`}>
-        <div className="modal-content" style={{ width: '90%', maxWidth: '360px', padding: '24px 20px' }}>
-          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px'}}>
-              <h3 style={{ margin: 0, fontSize: '18px' }}>새로운 알림</h3>
-              <button onClick={markAllNotisAsRead} style={{background:'none', border:'none', color:'var(--primary)', fontSize:'13px', fontWeight:'bold', cursor:'pointer'}}>모두 읽음</button>
-          </div>
-          <div style={{maxHeight:'300px', overflowY:'auto', textAlign:'left'}}>
-              {notifications.length === 0 ? (
-                <p style={{textAlign:'center', color:'var(--text-sub)', fontSize:'14px'}}>알림이 없습니다.</p> 
-              ) : (
-                  notifications.map(n => (
-                      <div key={n.id} style={{padding:'12px', background: n.isRead ? 'white' : '#f1f5f9', borderBottom:'1px solid #e2e8f0', borderRadius:'8px', marginBottom:'8px'}}>
-                          <p style={{margin:0, fontSize:'14px', color:'var(--text-main)'}}>
-                              <strong>{n.fromName}</strong>님이 회원님의 리포트에 {n.type === 'like' ? '하트를 눌렀습니다. ❤️' : '댓글을 남겼습니다. 💬'}
-                          </p>
-                      </div>
-                  ))
-              )}
-          </div>
-          <button className="sheet-btn cancel" onClick={() => setIsNotiModalOpen(false)}>닫기</button>
-        </div>
-      </div>
-
-      {/* 게시물 옵션 (차단, 신고) 바텀시트 */}
+      {}
       <div className={`bottom-sheet-overlay ${postOptionsMenu ? 'active' : ''}`} onClick={() => setPostOptionsMenu(null)}></div>
       <div className={`bottom-sheet ${postOptionsMenu ? 'active' : ''}`}>
         <p style={{ margin: '0 0 20px 0', fontWeight: 700, textAlign: 'center' }}>게시물 옵션</p>
@@ -1637,7 +1720,6 @@ export default function App() {
         <button className="sheet-btn cancel" onClick={() => setPostOptionsMenu(null)}>취소</button>
       </div>
 
-      {/* 게시물 신고 사유 작성 모달 */}
       <div className={`modal-overlay ${isReportPostModalOpen ? 'active' : ''}`}>
         <div className="modal-content">
           <h3 style={{ marginTop: 0, marginBottom: '12px' }}>게시물 신고</h3>
@@ -1648,7 +1730,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* 개발자 피드백 전송 및 과거 내역 확인(히스토리) 모달 */}
+      {/* 개발자 피드백 전송 모달 */}
       <div className={`modal-overlay ${isFeedbackModalOpen ? 'active' : ''}`}>
         <div className="modal-content">
           <h3 style={{ marginTop: 0, marginBottom: '12px' }}>개발자에게 피드백 전송</h3>
@@ -1684,30 +1766,13 @@ export default function App() {
         </div>
       </div>
 
+      {}
       <div className={`bottom-sheet-overlay ${isPhotoSheetOpen ? 'active' : ''}`} onClick={() => setIsPhotoSheetOpen(false)}></div>
       <div className={`bottom-sheet ${isPhotoSheetOpen ? 'active' : ''}`}>
         <p style={{ margin: '0 0 20px 0', fontWeight: 700, textAlign: 'center' }}>사진 첨부 방식 선택</p>
         <button className="sheet-btn" onClick={() => triggerPhotoInput('camera')}>📷 카메라로 바로 촬영</button>
         <button className="sheet-btn" onClick={() => triggerPhotoInput('gallery')}>🖼️ 스마트폰 앨범에서 선택</button>
         <button className="sheet-btn cancel" onClick={() => setIsPhotoSheetOpen(false)}>취소</button>
-      </div>
-
-      <div className={`modal-overlay ${isTermsModalOpen ? 'active' : ''}`}>
-        <div className="modal-content" style={{ padding: '24px 20px' }}>
-          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>이용 약관 동의</h3>
-          <div style={{ textAlign: 'left', background: '#f8fafc', padding: '16px', borderRadius: '12px', marginBottom: '24px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', fontSize: '14px', fontWeight: '600', marginBottom: '12px', cursor: 'pointer' }}>
-              <input type="checkbox" checked={termsAgreed && privacyAgreed} onChange={(e) => { setTermsAgreed(e.target.checked); setPrivacyAgreed(e.target.checked); }} style={{marginRight:'10px', width:'18px', height:'18px', accentColor:'var(--primary)'}} />
-              전체 동의하기
-            </label>
-            <div style={{ paddingLeft: '28px', fontSize: '13px', color: 'var(--text-sub)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <label><input type="checkbox" checked={termsAgreed} onChange={(e) => setTermsAgreed(e.target.checked)} /> (필수) 서비스 이용약관 동의</label>
-              <label><input type="checkbox" checked={privacyAgreed} onChange={(e) => setPrivacyAgreed(e.target.checked)} /> (필수) 개인정보 수집 및 이용 동의</label>
-            </div>
-          </div>
-          <button className="sheet-btn" style={{ background: (termsAgreed && privacyAgreed) ? 'var(--primary)' : '#e2e8f0', color: (termsAgreed && privacyAgreed) ? 'white' : '#94a3b8', border: 'none' }} onClick={processLogin}>동의하고 로그인 계속하기</button>
-          <button className="sheet-btn cancel" onClick={() => setIsTermsModalOpen(false)}>취소</button>
-        </div>
       </div>
 
       <div className={`modal-overlay ${selectedImage ? 'active' : ''}`} onClick={() => setSelectedImage(null)} style={{zIndex: 1000}}>
@@ -1728,7 +1793,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* 시스템 얼럿(window.confirm) 대체 자체 모달 */}
       <div className={`modal-overlay ${confirmDialog.show ? 'active' : ''}`}>
         <div className="modal-content" style={{width:'80%', maxWidth:'320px', padding:'24px 20px'}}>
             <h3 style={{marginTop:0, marginBottom:'16px', fontSize:'16px', color:'var(--text-main)', lineHeight:'1.5'}}>{confirmDialog.msg}</h3>
