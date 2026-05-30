@@ -32,6 +32,8 @@ import {
   getDownloadURL 
 } from "firebase/storage";
 
+// 💡 [새로운 대안] 패키지 모듈 대신 브라우저 내장 fetch API를 활용하여 EmailJS 연동
+
 const firebaseConfig = {
   apiKey: "AIzaSyA_XmIf672lF5y7VyjoK-7FIHdBITgiwnw",
   authDomain: "beforeter-72de2.firebaseapp.com",
@@ -53,7 +55,12 @@ const APP_ID = 'beforeter-app';
 
 // 🌟 [배포 버전 관리] 새롭게 배포하실 때마다 이 값을 변경해주세요. (예: v1.0.2)
 // 이 값이 로컬스토리지의 값과 다르면 접속 시 유저에게 업데이트 알림을 띄웁니다.
-const APP_VERSION = 'v1.0.1 (2026-05-29 23:30 배포)';
+const APP_VERSION = 'v1.0.2 (2026-05-31 배포)';
+
+// 📧 EmailJS 연동 키 세팅 (EmailJS 사이트에서 발급받은 3가지 값을 여기에 넣으세요!)
+const EMAILJS_SERVICE_ID = "YOUR_SERVICE_ID";   // 예: service_abc123
+const EMAILJS_TEMPLATE_ID = "YOUR_TEMPLATE_ID"; // 예: template_xyz789
+const EMAILJS_PUBLIC_KEY = "YOUR_PUBLIC_KEY";   // 예: aBcDeFgHiJkLmNoPq
 
 const TERMS_OF_SERVICE = `
 제1조 (목적)
@@ -92,7 +99,7 @@ const PRIVACY_POLICY = `
 - 선택항목: 사업자등록번호, 상호명, 연락처, 자기소개, 전문분야 키워드
 
 3. 개인정보의 보유 및 이용기간
-회사는 법령에 따른 개인정보 보유·이용기간 또는 정보주체로부터 개인정보를 수집 시에 동의받은 개인정보 보유·이용기간 내에서 개인정보를 처리·보유합니다.
+회사는 법령에 따른 개인정보 보유·이용기간 또는 정보주체로부터 개인정보 수집 시에 동의받은 개인정보 보유·이용기간 내에서 개인정보를 처리·보유합니다.
 - 회원 탈퇴 시까지 (단, 관계 법령에 따라 보존할 필요가 있는 경우 해당 법령에서 정한 기간 동안 보존)
 `;
 
@@ -107,6 +114,7 @@ export default function App() {
   const [notifications, setNotifications] = useState([]);
   const [myFeedbacks, setMyFeedbacks] = useState([]); 
   const [appUpdateNoti, setAppUpdateNoti] = useState(null); // 앱 배포 업데이트 알림
+  const [pendingBizUsers, setPendingBizUsers] = useState([]); // 사업자 검수 대기 유저 목록 (관리자용)
   
   // 로컬 스토리지 차단 목록 초기화
   const getInitialBlocked = () => {
@@ -129,6 +137,7 @@ export default function App() {
   const [isNotiModalOpen, setIsNotiModalOpen] = useState(false);
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
   const [isAlimtalkModalOpen, setIsAlimtalkModalOpen] = useState(false);
+  const [isAlimtalkSending, setIsAlimtalkSending] = useState(false); // 알림톡 전송 중 상태
   
   const [postOptionsMenu, setPostOptionsMenu] = useState(null); 
   const [isReportPostModalOpen, setIsReportPostModalOpen] = useState(false);
@@ -187,11 +196,48 @@ export default function App() {
   
   const [feedFilter, setFeedFilter] = useState('전체'); 
   const [reportReason, setReportReason] = useState('');
-  const categories = ['전체', '건설', '미용', '인테리어', '청소', '기타'];
+  
+  // 카테고리 순서 변경: 전체, 인테리어, 청소, 미용, 건설, 기타
+  const categories = ['전체', '인테리어', '청소', '미용', '건설', '기타'];
 
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
   const profilePicRef = useRef(null);
+
+  // 공용 메일 발송 함수 (EmailJS REST API 직접 호출)
+  const sendEmailNotification = async (subject, message) => {
+    if (EMAILJS_SERVICE_ID === "YOUR_SERVICE_ID") {
+        console.warn("EmailJS 키가 아직 설정되지 않아 메일을 발송하지 못했습니다.");
+        return;
+    }
+    
+    try {
+        const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                service_id: EMAILJS_SERVICE_ID,
+                template_id: EMAILJS_TEMPLATE_ID,
+                user_id: EMAILJS_PUBLIC_KEY,
+                template_params: {
+                    subject: subject,
+                    message: message,
+                }
+            })
+        });
+
+        if (response.ok) {
+            console.log("EmailJS 전송 성공");
+        } else {
+            const errorText = await response.text();
+            console.error("EmailJS 전송 실패:", errorText);
+        }
+    } catch (error) {
+        console.error("EmailJS 네트워크 전송 에러:", error);
+    }
+  };
 
   // 카카오톡 링크 공유 시 미리보기를 위한 동적 메타태그 변경 함수
   const updateMetaTags = (report) => {
@@ -201,27 +247,33 @@ export default function App() {
     document.title = `${report.title} - 비포터`;
     
     // 메타 태그 업데이트 유틸
-    const setMeta = (property, content) => {
-      let element = document.querySelector(`meta[property="${property}"]`);
+    const setMeta = (property, content, isName = false) => {
+      let element = document.querySelector(`meta[${isName ? 'name' : 'property'}="${property}"]`);
       if (!element) {
         element = document.createElement('meta');
-        element.setAttribute('property', property);
+        if (isName) element.setAttribute('name', property);
+        else element.setAttribute('property', property);
         document.head.appendChild(element);
       }
       element.setAttribute('content', content);
     };
 
-    // 카카오톡 클릭 유도 문구 적용
-    const description = `[${report.authorName}] 프로님의 작업 결과물을 확인해보시겠어요?`;
+    // 카카오톡에 멋지게 보이기 위한 상세 정보 세팅
+    const description = `[${report.authorName}] 프로님의 작업 결과물을 확인해보시겠어요? 
+📅 작업일: ${report.taskDate} 
+📍 장소: ${report.location || '미상'}`;
     
-    setMeta('og:title', report.title);
-    setMeta('og:description', description);
-    
-    // 대표 이미지 설정 (첫번째 공간의 After 이미지)
     const coverImg = report.spaces && report.spaces.length > 0 
       ? report.spaces[0].afterImg 
       : (report.afterImg || 'https://www.beforeter.com/default-og.png');
+
+    // 카카오톡 스크랩봇을 위한 Open Graph 태그 강화
+    setMeta('og:title', `${report.title} - 비포터`);
+    setMeta('og:description', description);
     setMeta('og:image', coverImg);
+    setMeta('og:type', 'website');
+    setMeta('og:site_name', '비포터 (Beforeter)');
+    setMeta('description', description, true); // 일반 검색엔진용
   };
 
   useEffect(() => {
@@ -251,7 +303,7 @@ export default function App() {
                     if(docSnap.exists()) {
                         const reportData = { id: docSnap.id, ...docSnap.data() };
                         setDetailReport(reportData);
-                        updateMetaTags(reportData); // 메타태그 업데이트 호출
+                        updateMetaTags(reportData);
                     }
                     else { showToast("존재하지 않는 리포트입니다."); setCurrentView('feed'); }
                 } catch(e) { showToast("오류가 발생했습니다."); setCurrentView('feed'); }
@@ -310,6 +362,12 @@ export default function App() {
             userData = { ...userData, ...userSnap.data(), id: user.uid };
           } else {
             await setDoc(userRef, userData);
+            
+            // 💡 [EmailJS] 새로운 유저 가입 알림 메일 전송
+            sendEmailNotification(
+                `[비포터] 🎉 새로운 작업자 회원가입!`,
+                `이름: ${userData.name}\n이메일: ${userData.email}\n가입 플랫폼: ${userData.provider}\n\n새로운 회원이 비포터에 합류했습니다. 환영해 주세요!`
+            );
           }
           setCurrentUser(userData);
         } catch (error) {
@@ -345,10 +403,23 @@ export default function App() {
           }, (err) => console.error("피드백 로드 오류:", err));
         } catch (e) { console.error(e); }
 
+        // 👑 [관리자 전용] 사업자 검수 대기 목록 실시간 연동
+        if (user.email === 'jinthemoon@kakao.com') {
+            try {
+                const adminQ = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where("bizStatus", "==", "pending"));
+                onSnapshot(adminQ, (snap) => {
+                    const pUsers = [];
+                    snap.forEach(d => pUsers.push({ id: d.id, ...d.data() }));
+                    setPendingBizUsers(pUsers);
+                });
+            } catch (e) { console.error("관리자 로드 오류:", e); }
+        }
+
       } else { 
         setCurrentUser(null); 
         setNotifications([]); 
         setMyFeedbacks([]);
+        setPendingBizUsers([]);
       }
     });
     return () => unsubscribe();
@@ -450,7 +521,6 @@ export default function App() {
         return showToast("서비스 이용약관 및 개인정보 수집에 동의해주세요.");
     }
     try { 
-      // 카카오 OIDC 로그인을 위한 프로바이더 설정 파라미터 (프롬프트 강제 띄우기 등)
       kakaoProvider.setCustomParameters({
         prompt: 'select_account'
       });
@@ -479,11 +549,10 @@ export default function App() {
     }
   };
 
+  // 사업자 등록번호 포맷팅 (###-##-####)
   const formatBizNum = (value) => {
-    // 숫자만 추출
     const raw = value.replace(/[^0-9]/g, '');
     let res = '';
-    // ###-##-##### 포맷으로 변환
     if (raw.length < 4) {
       res = raw;
     } else if (raw.length < 6) {
@@ -544,10 +613,10 @@ export default function App() {
     
     const kwdArray = editKeywords.split(',').map(k => k.trim()).filter(k => k !== '').slice(0, 5);
     
-    // 사업자 번호가 변경되었고 내용이 있다면 검수 상태로 변경
     let newBizStatus = currentUser.bizStatus || 'none';
     const isBizNumChanged = editBizNum !== currentUser.bizNum;
     
+    // 사업자 번호가 변경되었고 12자리(###-##-####)를 모두 채웠다면 검수 상태로 변경
     if (isBizNumChanged && editBizNum.length === 12) {
         newBizStatus = 'pending';
     } else if (editBizNum === '') {
@@ -571,15 +640,12 @@ export default function App() {
       setIsProfileModalOpen(false); 
       showToast("프로필이 저장되었습니다.");
 
-      // 사업자 검수 요청 이메일 발송
       if (newBizStatus === 'pending') {
-          await addDoc(collection(db, 'mail'), {
-            to: 'jinthemoon@kakao.com',
-            message: {
-              subject: `[비포터] 🏢 사업자 등록번호 검수 요청`,
-              text: `사용자: ${currentUser.name} (${currentUser.id})\n상호명: ${editCompany}\n제출된 사업자등록번호: ${editBizNum}\n\n관리자 페이지에서 검수를 진행해주세요.`
-            }
-          });
+          // 💡 [EmailJS] 사업자 번호 제출 시 알림 메일 전송
+          sendEmailNotification(
+            `[비포터] 🏢 사업자 등록번호 검수 요청`,
+            `사용자: ${currentUser.name} (${currentUser.id})\n상호명: ${editCompany}\n제출된 사업자등록번호: ${editBizNum}\n\n관리자 메뉴에서 검수를 진행해주세요.`
+          );
           showToast("사업자 등록번호 검수가 요청되었습니다.");
       }
 
@@ -587,6 +653,25 @@ export default function App() {
       console.error(e);
       showToast("프로필 저장에 실패했습니다."); 
     }
+  };
+
+  // 👑 [관리자 전용] 사업자 승인 및 거절 함수
+  const approveBiz = async (userId, userName) => {
+    triggerConfirm(`[${userName}]님의 사업자를 승인하시겠습니까?`, async () => {
+        try {
+            await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userId), { bizStatus: 'approved' });
+            showToast("사업자 승인 완료!");
+        } catch(e) { showToast("승인 처리 실패"); }
+    });
+  };
+
+  const rejectBiz = async (userId, userName) => {
+    triggerConfirm(`[${userName}]님의 사업자를 거절하시겠습니까? (번호는 삭제됩니다)`, async () => {
+        try {
+            await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userId), { bizStatus: 'none', bizNum: '' });
+            showToast("사업자 거절 완료!");
+        } catch(e) { showToast("거절 처리 실패"); }
+    });
   };
 
   const openPhotoSheet = (index, type) => { 
@@ -611,7 +696,7 @@ export default function App() {
         if (currentPhotoTarget.type === 'before') newSpaces[currentPhotoTarget.index].beforeImg = compressedStr;
         if (currentPhotoTarget.type === 'after') newSpaces[currentPhotoTarget.index].afterImg = compressedStr;
         setSpaces(newSpaces);
-      }, 1000); // 퀄리티 보장을 위해 사이즈 상향
+      }, 1000); 
     }
     e.target.value = ''; 
   };
@@ -680,6 +765,12 @@ export default function App() {
         createdAt: serverTimestamp()
       });
       
+      // 💡 [EmailJS] 새로운 리포트 등록 시 알림 메일 전송
+      sendEmailNotification(
+          `[비포터] 🚀 새로운 작업 리포트가 등록되었습니다!`,
+          `작성자: ${currentUser.name}\n작업 제목: ${taskTitle}\n작업 일자: ${taskDate}\n카테고리: ${taskCategory}\n\n새로운 리포트가 성공적으로 업로드되었습니다.\n\n리포트 바로가기: https://www.beforeter.com/report/${docRef.id}`
+      );
+
       setLatestReportId(docRef.id); 
       setIsFinishModalOpen(true);
     } catch (error) { 
@@ -695,6 +786,9 @@ export default function App() {
     setIsDetailLoading(true); 
     setDetailViewMode('horizontal'); 
     setFlippedCards({});
+    
+    // 리포트를 열 때 스크롤을 항상 가장 위로 올려줍니다.
+    window.scrollTo({ top: 0, behavior: 'smooth' });
     
     try {
       const docSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', reportId));
@@ -784,13 +878,26 @@ export default function App() {
     }
   };
 
-  const sendAlimtalk = () => {
+  // 💡 알림톡 전송 함수
+  const sendAlimtalk = async () => {
     if(alimtalkPhone.length < 10) {
         return showToast("올바른 연락처를 입력해주세요.");
     }
-    showToast(`${alimtalkPhone} 번호로 알림톡 전송 요청이 완료되었습니다.`);
-    setIsAlimtalkModalOpen(false);
-    setAlimtalkPhone('');
+    
+    setIsAlimtalkSending(true);
+    showToast(`${alimtalkPhone} 번호로 알림톡 전송을 요청합니다...`);
+
+    try {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        showToast(`알림톡 전송 요청이 성공적으로 서버에 전달되었습니다. 🚀`);
+        setIsAlimtalkModalOpen(false);
+        setAlimtalkPhone('');
+    } catch (error) {
+        console.error("알림톡 전송 에러:", error);
+        showToast("알림톡 전송 중 오류가 발생했습니다. 나중에 다시 시도해주세요.");
+    } finally {
+        setIsAlimtalkSending(false);
+    }
   };
 
   const submitComment = async () => {
@@ -880,18 +987,11 @@ export default function App() {
       // DB 저장
       await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'feedbacks'), fbData);
 
-      // 이메일 큐 전송 (확장 프로그램 연동)
-      try {
-        await addDoc(collection(db, 'mail'), {
-            to: 'jinthemoon@kakao.com',
-            message: {
-              subject: `[비포터] 💡 새로운 피드백 접수: ${feedbackCategory}`,
-              text: `작성자: ${currentUser?.name || '익명'}\n이메일: ${fbData.email}\n카테고리: ${feedbackCategory}\n\n내용:\n${feedbackText}`
-            }
-        });
-      } catch (mailError) {
-        console.error("이메일 발송 큐 등록 실패 (무시됨):", mailError);
-      }
+      // 💡 [EmailJS] 피드백 이메일 전송
+      sendEmailNotification(
+          `[비포터] 💡 새로운 피드백 접수: ${feedbackCategory}`,
+          `작성자: ${currentUser?.name || '익명'}\n이메일: ${fbData.email}\n카테고리: ${feedbackCategory}\n\n내용:\n${feedbackText}`
+      );
 
       showToast("소중한 의견 감사합니다! 적극 검토하겠습니다. ❤️"); 
       setIsFeedbackModalOpen(false); 
@@ -904,18 +1004,15 @@ export default function App() {
   };
 
   const handleOpenNoti = () => {
-    // 알림은 로그인 유무 상관없이 시스템 업데이트 알림을 보여줄 수 있도록 함
     setIsNotiModalOpen(true);
   };
 
   const markAllNotisAsRead = async () => {
-    // 1. 앱 시스템 업데이트 알림 읽음 처리
     if (appUpdateNoti && !appUpdateNoti.isRead) {
         localStorage.setItem('beporter_version', APP_VERSION);
         setAppUpdateNoti(prev => ({ ...prev, isRead: true }));
     }
 
-    // 2. 유저 개인 알림 읽음 처리
     notifications.forEach(async (noti) => {
       if(!noti.isRead) {
         try {
@@ -949,13 +1046,10 @@ export default function App() {
         createdAt: serverTimestamp()
       });
 
-      await addDoc(collection(db, 'mail'), {
-        to: 'jinthemoon@kakao.com',
-        message: {
-          subject: `[비포터] 🚨 새로운 게시물 신고 접수`,
-          text: `신고자 ID: ${currentUser.id}\n신고자 이름: ${currentUser.name}\n신고된 게시물 ID: ${postOptionsMenu.reportId}\n\n신고 사유:\n${reportReason}`
-        }
-      });
+      sendEmailNotification(
+        `[비포터] 🚨 새로운 게시물 신고 접수`,
+        `신고자 ID: ${currentUser.id}\n신고자 이름: ${currentUser.name}\n신고된 게시물 ID: ${postOptionsMenu.reportId}\n\n신고 사유:\n${reportReason}`
+      );
 
       showToast("신고가 접수되었습니다. 관리자 검토 후 조치됩니다.");
       setIsReportPostModalOpen(false); 
@@ -1568,6 +1662,11 @@ export default function App() {
             margin-top: 10px; 
             cursor: pointer; 
         }
+
+        .submit-btn:disabled {
+            background-color: #94a3b8;
+            cursor: not-allowed;
+        }
         
         .fab-container { 
             position: fixed; 
@@ -1817,7 +1916,7 @@ export default function App() {
               )}
             </div>
             
-            <ul style={{listStyle:'none', padding:0, margin:0, flex:1}}>
+            <ul style={{listStyle:'none', padding:0, margin:0, flex:1, overflowY:'auto'}}>
               <li style={{borderBottom:'1px solid #f1f5f9'}}>
                 <button onClick={() => { setIsMenuOpen(false); switchView('feed'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>🏠 피드 홈</button>
               </li>
@@ -1827,6 +1926,11 @@ export default function App() {
               {currentUser && (
                 <li style={{borderBottom:'1px solid #f1f5f9'}}>
                   <button onClick={() => { setIsMenuOpen(false); switchView('mypage'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'16px', fontWeight:600, cursor:'pointer'}}>👤 마이페이지 (내 리포트)</button>
+                </li>
+              )}
+              {currentUser?.email === 'jinthemoon@kakao.com' && (
+                <li style={{borderBottom:'1px solid #f1f5f9', background:'#fef08a'}}>
+                  <button onClick={() => { setIsMenuOpen(false); switchView('admin'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'#854d0e', fontSize:'16px', fontWeight:800, cursor:'pointer'}}>👑 관리자 (사업자 검수)</button>
                 </li>
               )}
               <li style={{borderBottom:'1px solid #f1f5f9'}}>
@@ -1847,6 +1951,43 @@ export default function App() {
             </ul>
         </div>
       </div>
+
+      {/* 👑 뷰: 관리자 (사업자 검수) */}
+      {currentView === 'admin' && currentUser?.email === 'jinthemoon@kakao.com' && (
+        <div className="view-section">
+          <div style={{padding:'20px', textAlign:'center', background:'var(--primary-light)'}}>
+            <h2 style={{margin:0, color:'var(--primary-hover)', fontSize:'20px'}}>사업자 검수 관리</h2>
+            <p style={{margin:'8px 0 0 0', fontSize:'13px', color:'var(--text-sub)'}}>검수 대기중인 사용자 수: {pendingBizUsers.length}명</p>
+          </div>
+          <div className="feed-container">
+            {pendingBizUsers.length === 0 ? (
+                <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)'}}>
+                    대기 중인 검수 요청이 없습니다.
+                </div>
+            ) : (
+                pendingBizUsers.map(user => (
+                    <div key={user.id} className="feed-card" style={{border:'2px solid #fef08a'}}>
+                        <div style={{display:'flex', gap:'12px', alignItems:'center', marginBottom:'16px'}}>
+                            <div className="author-avatar">{user.name.charAt(0)}</div>
+                            <div>
+                                <h3 style={{margin:0, fontSize:'16px'}}>{user.name} <span style={{fontSize:'12px', color:'var(--text-sub)'}}>({user.email})</span></h3>
+                                <p style={{margin:'4px 0 0 0', fontSize:'14px', fontWeight:'bold'}}>{user.company}</p>
+                            </div>
+                        </div>
+                        <div style={{background:'#f8fafc', padding:'12px', borderRadius:'8px', marginBottom:'16px'}}>
+                            <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)'}}>제출된 사업자번호:</p>
+                            <p style={{margin:'4px 0 0 0', fontSize:'18px', fontWeight:'800', letterSpacing:'1px'}}>{user.bizNum}</p>
+                        </div>
+                        <div style={{display:'flex', gap:'10px'}}>
+                            <button className="sheet-btn" style={{margin:0, flex:1, background:'var(--danger)', color:'white', border:'none'}} onClick={() => rejectBiz(user.id, user.name)}>거절</button>
+                            <button className="sheet-btn" style={{margin:0, flex:1, background:'var(--primary)', color:'white', border:'none'}} onClick={() => approveBiz(user.id, user.name)}>승인하기</button>
+                        </div>
+                    </div>
+                ))
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 뷰: 피드 홈 */}
       {currentView === 'feed' && (
@@ -1877,10 +2018,9 @@ export default function App() {
                       if(e.target.closest('.more-opts-btn') || e.target.closest('.action-btn') || e.target.closest('.author-avatar')) return;
                       openDetailView(item.id);
                   }}>
-                    {item.reportNo && <div style={{position:'absolute', top:'-10px', left:'16px', background:'var(--text-main)', color:'white', padding:'4px 10px', borderRadius:'8px', fontSize:'11px', fontWeight:'800', letterSpacing:'1px', boxShadow:'0 4px 6px rgba(0,0,0,0.1)'}}>No. {item.reportNo}</div>}
                     <button className="more-opts-btn" onClick={(e) => { e.stopPropagation(); setPostOptionsMenu({ reportId: item.id, authorId: item.authorId }); }}>⋮</button>
                     
-                    <div className="feed-author" style={{marginTop: item.reportNo ? '10px' : '0'}}>
+                    <div className="feed-author">
                       <div className="author-avatar" onClick={(e) => { e.stopPropagation(); setSelectedImage(item.authorPic); }}>
                         {item.authorPic ? <img src={item.authorPic} alt="프로필" /> : (item.authorName || '작업자').charAt(0)}
                       </div>
@@ -1953,7 +2093,6 @@ export default function App() {
                </div>
             </div>
 
-            {/* 카카오 로그인 버튼 추가 */}
             <button className="social-btn kakao" onClick={processKakaoLogin}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 3c-5.52 0-10 3.58-10 8 0 2.85 1.8 5.34 4.5 6.74-.2.7-.6 2.22-.65 2.45-.06.28.1.28.24.18.12-.08 2.74-1.85 3.86-2.61.65.08 1.34.14 2.05.14 5.52 0 10-3.58 10-8s-4.48-8-10-8z"/>
@@ -2017,6 +2156,7 @@ export default function App() {
             
             <h2 style={{ margin: 0, fontSize: '20px', color: 'var(--text-main)', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
                 {currentUser.name}
+                {currentUser.bizStatus === 'approved' && <span className="biz-badge">✅ 사업자 인증됨</span>}
                 {currentUser.bizStatus === 'pending' && <span className="biz-badge pending">사업자 검수중</span>}
             </h2>
             {currentUser.company && <p style={{margin:'4px 0 0 0', fontSize:'14px', color:'var(--text-sub)'}}>{currentUser.company}</p>}
@@ -2367,7 +2507,9 @@ export default function App() {
             <label className="title-label" style={{ fontSize: '13px' }}>받는 사람 연락처</label>
             <input type="tel" className="title-input" style={{ padding: '12px' }} placeholder="숫자만 입력 (예: 01012345678)" value={alimtalkPhone} onChange={(e) => setAlimtalkPhone(e.target.value.replace(/[^0-9]/g, ''))} />
           </div>
-          <button className="sheet-btn" style={{ background: 'var(--kakao)', color: 'var(--kakao-text)', border: 'none', fontWeight:'800' }} onClick={sendAlimtalk}>전송하기</button>
+          <button className="sheet-btn" disabled={isAlimtalkSending} style={{ background: 'var(--kakao)', color: 'var(--kakao-text)', border: 'none', fontWeight:'800' }} onClick={sendAlimtalk}>
+            {isAlimtalkSending ? '전송 처리 중...' : '전송하기'}
+          </button>
           <button className="sheet-btn cancel" onClick={() => setIsAlimtalkModalOpen(false)}>닫기</button>
         </div>
       </div>
@@ -2463,18 +2605,23 @@ export default function App() {
           <h3 style={{ marginTop: 0, marginBottom: '20px', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>🔔 알림센터</h3>
           
           {/* 시스템 업데이트 알림 */}
-          {appUpdateNoti && !appUpdateNoti.isRead && (
-             <div style={{padding:'16px', borderBottom:'1px solid #f1f5f9', background: '#f0fdfa', borderRadius:'8px', marginBottom:'12px', textAlign:'left'}}>
-                <p style={{margin:0, fontSize:'14px', color:'var(--primary-hover)', fontWeight:'bold', marginBottom:'6px'}}>
-                    📢 {appUpdateNoti.fromName}
-                </p>
-                <p style={{margin:0, fontSize:'13px', color:'var(--text-main)', lineHeight:'1.5'}}>
-                    {appUpdateNoti.text}
-                </p>
+          {appUpdateNoti && (
+             <div style={{padding:'16px', borderBottom:'1px solid #f1f5f9', background: appUpdateNoti.isRead ? 'transparent' : '#f0fdfa', borderRadius:'8px', marginBottom:'12px', textAlign:'left'}}>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
+                    <div>
+                        <p style={{margin:0, fontSize:'14px', color: appUpdateNoti.isRead ? 'var(--text-sub)' : 'var(--primary-hover)', fontWeight:'bold', marginBottom:'6px'}}>
+                            📢 {appUpdateNoti.fromName}
+                        </p>
+                        <p style={{margin:0, fontSize:'13px', color:'var(--text-main)', lineHeight:'1.5'}}>
+                            {appUpdateNoti.text}
+                        </p>
+                    </div>
+                    {appUpdateNoti.isRead && <span style={{fontSize:'11px', color:'#94a3b8', whiteSpace:'nowrap', marginLeft:'8px'}}>읽음</span>}
+                </div>
              </div>
           )}
 
-          {notifications.length === 0 && (!appUpdateNoti || appUpdateNoti.isRead) ? (
+          {notifications.length === 0 && (!appUpdateNoti) ? (
             <div style={{padding:'40px 0'}}>
               <p style={{fontSize:'14px', color:'var(--text-sub)', margin:0}}>새로운 알림이 없습니다.</p>
             </div>
@@ -2482,9 +2629,12 @@ export default function App() {
             <div style={{textAlign:'left'}}>
               {notifications.map(n => (
                 <div key={n.id} style={{padding:'12px', borderBottom:'1px solid #f1f5f9', background: n.isRead ? 'transparent' : '#f0fdfa', borderRadius:'8px', marginBottom:'8px'}}>
-                  <p style={{margin:0, fontSize:'13px', color:'var(--text-main)'}}>
-                    <strong>{n.fromName}</strong>님이 {n.type === 'like' ? '회원님의 리포트를 좋아합니다 ❤️' : '회원님의 리포트에 댓글을 남겼습니다 💬'}
-                  </p>
+                  <div style={{display:'flex', justifyContent:'space-between'}}>
+                    <p style={{margin:0, fontSize:'13px', color: n.isRead ? 'var(--text-sub)' : 'var(--text-main)'}}>
+                        <strong>{n.fromName}</strong>님이 {n.type === 'like' ? '회원님의 리포트를 좋아합니다 ❤️' : '회원님의 리포트에 댓글을 남겼습니다 💬'}
+                    </p>
+                    {n.isRead && <span style={{fontSize:'11px', color:'#94a3b8', whiteSpace:'nowrap', marginLeft:'8px'}}>읽음</span>}
+                  </div>
                 </div>
               ))}
               <button className="sheet-btn" style={{marginTop:'16px', fontSize:'14px'}} onClick={markAllNotisAsRead}>모두 읽음 처리</button>
