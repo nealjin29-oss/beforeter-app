@@ -51,6 +51,10 @@ const storage = getStorage(app);
 
 const APP_ID = 'beforeter-app';
 
+// 🌟 [배포 버전 관리] 새롭게 배포하실 때마다 이 값을 변경해주세요. (예: v1.0.2)
+// 이 값이 로컬스토리지의 값과 다르면 접속 시 유저에게 업데이트 알림을 띄웁니다.
+const APP_VERSION = 'v1.0.1 (2026-05-29 23:30 배포)';
+
 const TERMS_OF_SERVICE = `
 제1조 (목적)
 본 약관은 "비포터(Beforeter)" (이하 "회사"라 합니다)가 제공하는 작업 리포트 생성 및 공유 서비스(이하 "서비스"라 합니다)의 이용과 관련하여 회사와 회원 간의 권리, 의무 및 책임사항, 기타 필요한 사항을 규정함을 목적으로 합니다.
@@ -102,6 +106,7 @@ export default function App() {
   const [feedData, setFeedData] = useState([]); 
   const [notifications, setNotifications] = useState([]);
   const [myFeedbacks, setMyFeedbacks] = useState([]); 
+  const [appUpdateNoti, setAppUpdateNoti] = useState(null); // 앱 배포 업데이트 알림
   
   // 로컬 스토리지 차단 목록 초기화
   const getInitialBlocked = () => {
@@ -189,7 +194,6 @@ export default function App() {
   const profilePicRef = useRef(null);
 
   // 카카오톡 링크 공유 시 미리보기를 위한 동적 메타태그 변경 함수
-  // (참고: 완벽한 OG 태그 수집을 위해서는 SSR이나 Firebase Cloud Functions 렌더링이 필요하지만, SPA 내에서도 변경해둡니다.)
   const updateMetaTags = (report) => {
     if (!report) return;
     
@@ -221,6 +225,18 @@ export default function App() {
   };
 
   useEffect(() => {
+    // 앱 버전 확인 및 신규 배포 알림 로직
+    const storedVersion = localStorage.getItem('beporter_version');
+    if (storedVersion !== APP_VERSION) {
+        setAppUpdateNoti({
+            id: 'sys_update_' + Date.now(),
+            type: 'system',
+            fromName: '비포터 관리자',
+            text: `새로운 버전이 배포되었습니다! (${APP_VERSION}) 🚀`,
+            isRead: false
+        });
+    }
+
     const handleRouting = async (path, isPop = false) => {
         if (path === '/' || path === '') {
             setCurrentView('feed');
@@ -420,8 +436,12 @@ export default function App() {
       showToast(`환영합니다! 구글 로그인이 완료되었습니다.`); 
       switchView('feed'); 
     } catch (error) { 
-      console.error(error);
-      showToast("구글 로그인에 실패했습니다."); 
+      console.error("구글 로그인 에러:", error);
+      if (error.code === 'auth/unauthorized-domain') {
+          triggerConfirm("Firebase 보안 알림: 현재 접속 중인 도메인이 Firebase 승인된 도메인에 등록되어 있지 않아 로그인이 차단되었습니다. Firebase 콘솔(Authentication > 설정)에서 도메인을 추가해주세요.", () => {});
+      } else {
+          showToast("구글 로그인에 실패했습니다."); 
+      }
     }
   };
 
@@ -440,7 +460,11 @@ export default function App() {
       switchView('feed'); 
     } catch (error) { 
       console.error("카카오 로그인 에러:", error);
-      showToast("카카오 로그인에 실패했습니다. 관리자 설정(OIDC)을 확인해주세요."); 
+      if (error.code === 'auth/unauthorized-domain') {
+          triggerConfirm("Firebase 보안 알림: 현재 접속 중인 도메인이 Firebase 승인된 도메인에 등록되어 있지 않아 로그인이 차단되었습니다. Firebase 콘솔(Authentication > 설정)에서 도메인을 추가해주세요.", () => {});
+      } else {
+          showToast("카카오 로그인에 실패했습니다. 관리자 설정(OIDC)을 확인해주세요."); 
+      }
     }
   };
 
@@ -764,8 +788,6 @@ export default function App() {
     if(alimtalkPhone.length < 10) {
         return showToast("올바른 연락처를 입력해주세요.");
     }
-    // 백엔드 API 연동이 필요한 구간
-    // 예: axios.post('/api/send-alimtalk', { phone: alimtalkPhone, reportId: latestReportId })
     showToast(`${alimtalkPhone} 번호로 알림톡 전송 요청이 완료되었습니다.`);
     setIsAlimtalkModalOpen(false);
     setAlimtalkPhone('');
@@ -869,7 +891,6 @@ export default function App() {
         });
       } catch (mailError) {
         console.error("이메일 발송 큐 등록 실패 (무시됨):", mailError);
-        // 메일 발송 큐가 실패해도 피드백 저장은 성공했으므로 사용자에게는 성공으로 표시합니다.
       }
 
       showToast("소중한 의견 감사합니다! 적극 검토하겠습니다. ❤️"); 
@@ -883,11 +904,18 @@ export default function App() {
   };
 
   const handleOpenNoti = () => {
-    if(!currentUser) return showToast("로그인 후 이용 가능합니다.");
+    // 알림은 로그인 유무 상관없이 시스템 업데이트 알림을 보여줄 수 있도록 함
     setIsNotiModalOpen(true);
   };
 
   const markAllNotisAsRead = async () => {
+    // 1. 앱 시스템 업데이트 알림 읽음 처리
+    if (appUpdateNoti && !appUpdateNoti.isRead) {
+        localStorage.setItem('beporter_version', APP_VERSION);
+        setAppUpdateNoti(prev => ({ ...prev, isRead: true }));
+    }
+
+    // 2. 유저 개인 알림 읽음 처리
     notifications.forEach(async (noti) => {
       if(!noti.isRead) {
         try {
@@ -895,6 +923,7 @@ export default function App() {
         } catch (e) { console.error(e); }
       }
     });
+
     showToast("모두 읽음 처리되었습니다.");
   };
 
@@ -979,7 +1008,9 @@ export default function App() {
     
   const myFeeds = currentUser ? feedData.filter(f => f.authorId === currentUser.id) : [];
   const publicProfileFeeds = publicProfileUser ? publicFeeds.filter(f => f.authorId === publicProfileUser.id) : [];
-  const unreadNotis = notifications.filter(n => !n.isRead).length;
+  
+  // 전체 읽지 않은 알림 개수 계산 (유저 개인 알림 + 시스템 업데이트 알림)
+  const unreadNotis = notifications.filter(n => !n.isRead).length + (appUpdateNoti && !appUpdateNoti.isRead ? 1 : 0);
 
   const renderFooter = () => (
     <div className="common-footer">
@@ -2430,7 +2461,20 @@ export default function App() {
       <div className={`modal-overlay ${isNotiModalOpen ? 'active' : ''}`}>
         <div className="modal-content" style={{maxHeight:'80vh', overflowY:'auto'}}>
           <h3 style={{ marginTop: 0, marginBottom: '20px', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>🔔 알림센터</h3>
-          {notifications.length === 0 ? (
+          
+          {/* 시스템 업데이트 알림 */}
+          {appUpdateNoti && !appUpdateNoti.isRead && (
+             <div style={{padding:'16px', borderBottom:'1px solid #f1f5f9', background: '#f0fdfa', borderRadius:'8px', marginBottom:'12px', textAlign:'left'}}>
+                <p style={{margin:0, fontSize:'14px', color:'var(--primary-hover)', fontWeight:'bold', marginBottom:'6px'}}>
+                    📢 {appUpdateNoti.fromName}
+                </p>
+                <p style={{margin:0, fontSize:'13px', color:'var(--text-main)', lineHeight:'1.5'}}>
+                    {appUpdateNoti.text}
+                </p>
+             </div>
+          )}
+
+          {notifications.length === 0 && (!appUpdateNoti || appUpdateNoti.isRead) ? (
             <div style={{padding:'40px 0'}}>
               <p style={{fontSize:'14px', color:'var(--text-sub)', margin:0}}>새로운 알림이 없습니다.</p>
             </div>
