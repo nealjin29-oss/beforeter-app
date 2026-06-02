@@ -117,8 +117,11 @@ export default function App() {
   const [appUpdateNoti, setAppUpdateNoti] = useState(null); // 앱 배포 업데이트 알림
   const [pendingBizUsers, setPendingBizUsers] = useState([]); // 사업자 검수 대기 유저 목록 (관리자용)
   
-  // 로컬 스토리지 차단 목록 초기화
+// 로컬 스토리지 차단 목록 초기화 (Next.js 에러 방지용)
   const getInitialBlocked = () => {
+    // 💡 추가된 코드: 서버에서 실행될 때는 localStorage를 찾지 않고 빈 배열을 반환합니다.
+    if (typeof window === 'undefined') return [];
+    
     try {
       const stored = localStorage.getItem('beporter_blocked');
       return stored ? JSON.parse(stored) : [];
