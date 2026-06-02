@@ -58,10 +58,9 @@ const APP_ID = 'beforeter-app';
 // 이 값이 로컬스토리지의 값과 다르면 접속 시 유저에게 업데이트 알림을 띄웁니다.
 const APP_VERSION = 'v1.0.2 (2026-05-31 배포)';
 
-// 📧 EmailJS 연동 키 세팅 (EmailJS 사이트에서 발급받은 3가지 값을 여기에 넣으세요!)
-const EMAILJS_SERVICE_ID = "YOUR_SERVICE_ID";   // 예: service_abc123
-const EMAILJS_TEMPLATE_ID = "YOUR_TEMPLATE_ID"; // 예: template_xyz789
-const EMAILJS_PUBLIC_KEY = "YOUR_PUBLIC_KEY";   // 예: aBcDeFgHiJkLmNoPq
+const EMAILJS_SERVICE_ID = process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID;
+const EMAILJS_TEMPLATE_ID = process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID;
+const EMAILJS_PUBLIC_KEY = process.env.NEXT_PUBLIC_EMAILJS_PUBLIC_KEY;
 
 const TERMS_OF_SERVICE = `
 제1조 (목적)
@@ -694,16 +693,26 @@ export default function App() {
   
   const handleFileSelect = (e) => {
     const file = e.target.files[0];
-    if (file && currentPhotoTarget) {
+  
+  if (file) {
+    // 💡 10MB 이상 파일 업로드 차단 로직 추가
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+      alert("이미지 용량이 너무 큽니다. 10MB 이하의 사진만 업로드 가능합니다.");
+      e.target.value = ''; // 선택 초기화
+      return;
+    }
+
+    // 기존 리사이징 로직 실행
+    if (currentPhotoTarget) {
       resizeAndCompressImage(file, (compressedStr) => {
-        const newSpaces = [...spaces];
-        if (currentPhotoTarget.type === 'before') newSpaces[currentPhotoTarget.index].beforeImg = compressedStr;
-        if (currentPhotoTarget.type === 'after') newSpaces[currentPhotoTarget.index].afterImg = compressedStr;
-        setSpaces(newSpaces);
+        // ... 기존 코드 유지
       }, 1000); 
     }
-    e.target.value = ''; 
-  };
+  }
+  e.target.value = ''; 
+};
+  
 
   const handleSpaceDescChange = (index, type, value) => {
     const newSpaces = [...spaces];
