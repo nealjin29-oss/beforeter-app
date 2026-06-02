@@ -36,12 +36,12 @@ import {
 // 💡 [새로운 대안] 패키지 모듈 대신 브라우저 내장 fetch API를 활용하여 EmailJS 연동
 
 const firebaseConfig = {
-  apiKey: "AIzaSyA_XmIf672lF5y7VyjoK-7FIHdBITgiwnw",
-  authDomain: "beforeter-72de2.firebaseapp.com",
-  projectId: "beforeter-72de2",
-  storageBucket: "beforeter-72de2.firebasestorage.app",
-  messagingSenderId: "849691385148",
-  appId: "1:849691385148:web:35b8a75e16e0b73f351239"
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
 };
 
 const app = initializeApp(firebaseConfig);
