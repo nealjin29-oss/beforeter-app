@@ -37,7 +37,7 @@ import {
   getDownloadURL 
 } from "firebase/storage";
 
-// 💡 [수정됨] 브라우저 환경(process가 없는 곳)에서 에러를 방지하는 안전한 환경변수 호출 함수
+// 💡 [수정됨] process is not defined 오류를 방지하는 안전한 환경변수 호출기
 const getSafeEnv = (key) => {
   if (typeof process !== 'undefined' && process.env) {
     return process.env[key];
@@ -45,30 +45,41 @@ const getSafeEnv = (key) => {
   return '';
 };
 
-// 💡 [수정됨] 현재 미리보기 캔버스와 Next.js 양쪽에서 모두 동작하도록 수정
-const firebaseConfig = typeof __firebase_config !== 'undefined' 
-  ? JSON.parse(__firebase_config) 
-  : {
-      apiKey: getSafeEnv('NEXT_PUBLIC_FIREBASE_API_KEY'),
+// 💡 [수정됨] Canvas 미리보기 환경 지원 및 API 키 누락 시 앱 충돌(Crash) 완벽 방지
+let firebaseConfig;
+try {
+  if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+    firebaseConfig = JSON.parse(__firebase_config);
+  } else {
+    firebaseConfig = {
+      apiKey: getSafeEnv('NEXT_PUBLIC_FIREBASE_API_KEY') || "dummy_api_key_to_prevent_crash",
       authDomain: getSafeEnv('NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN'),
       projectId: getSafeEnv('NEXT_PUBLIC_FIREBASE_PROJECT_ID'),
       storageBucket: getSafeEnv('NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET'),
       messagingSenderId: getSafeEnv('NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID'),
       appId: getSafeEnv('NEXT_PUBLIC_FIREBASE_APP_ID')
     };
+  }
+} catch (e) {
+  firebaseConfig = { apiKey: "dummy_api_key_to_prevent_crash" };
+}
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
+// 카카오 로그인을 위한 OIDC 프로바이더 설정 (Firebase 콘솔 세팅 필요)
 const kakaoProvider = new OAuthProvider('oidc.kakao');
 const db = getFirestore(app); 
 const storage = getStorage(app); 
 
+// 💡 [수정됨] 미리보기 환경에서도 권한 오류가 나지 않도록 앱 ID 자동 매핑
 const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'beforeter-app';
 
-const APP_VERSION = 'v1.0.3 (2026-06-03 배포)';
+// 🌟 [배포 버전 관리] 새롭게 배포하실 때마다 이 값을 변경해주세요. (예: v1.0.2)
+// 이 값이 로컬스토리지의 값과 다르면 접속 시 유저에게 업데이트 알림을 띄웁니다.
+const APP_VERSION = 'v1.0.2 (2026-05-31 배포)';
 
-const EMAILJS_SERVICE_ID = getSafeEnv('NEXT_PUBLIC_EMAILJS_SERVICE_ID') || "YOUR_SERVICE_ID";
+const EMAILJS_SERVICE_ID = getSafeEnv('NEXT_PUBLIC_EMAILJS_SERVICE_ID');
 const EMAILJS_TEMPLATE_ID = getSafeEnv('NEXT_PUBLIC_EMAILJS_TEMPLATE_ID');
 const EMAILJS_PUBLIC_KEY = getSafeEnv('NEXT_PUBLIC_EMAILJS_PUBLIC_KEY');
 
@@ -105,7 +116,7 @@ const PRIVACY_POLICY = `
 - 고충 처리: 민원인의 신원 확인, 민원사항 확인, 사실조사를 위한 연락·통지, 처리결과 통보
 
 2. 수집하는 개인정보의 항목
-- 필수항목: 이메일 주소, 이름(닉네임), 프로필 사진, 전화번호, 식별자(SNS 로그인 시)
+- 필수항목: 이메일 주소, 이름(닉네임), 프로필 사진, 식별자(SNS 로그인 시)
 - 선택항목: 사업자등록번호, 상호명, 연락처, 자기소개, 전문분야 키워드
 
 3. 개인정보의 보유 및 이용기간
@@ -118,23 +129,24 @@ export default function App() {
   const [currentView, setCurrentView] = useState('feed'); 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   
-  // 인증 폼 상태 추가 (로그인 / 회원가입)
+  // 💡 [추가됨] 인증 폼 상태 (로그인 / 회원가입)
   const [authMode, setAuthMode] = useState('login'); 
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
   const [authPhone, setAuthPhone] = useState('');
-  const [isAuthReady, setIsAuthReady] = useState(false); // 💡 [추가] 인증 상태 준비 여부
 
   // 유저 및 데이터 상태
   const [currentUser, setCurrentUser] = useState(null); 
   const [feedData, setFeedData] = useState([]); 
   const [notifications, setNotifications] = useState([]);
   const [myFeedbacks, setMyFeedbacks] = useState([]); 
-  const [appUpdateNoti, setAppUpdateNoti] = useState(null); 
-  const [pendingBizUsers, setPendingBizUsers] = useState([]); 
+  const [appUpdateNoti, setAppUpdateNoti] = useState(null); // 앱 배포 업데이트 알림
+  const [pendingBizUsers, setPendingBizUsers] = useState([]); // 사업자 검수 대기 유저 목록 (관리자용)
   
+  // 로컬 스토리지 차단 목록 초기화 (Next.js 에러 방지용)
   const getInitialBlocked = () => {
+    // 서버에서 실행될 때는 localStorage를 찾지 않고 빈 배열을 반환합니다.
     if (typeof window === 'undefined') return [];
     try {
       const stored = localStorage.getItem('beporter_blocked');
@@ -155,7 +167,7 @@ export default function App() {
   const [isNotiModalOpen, setIsNotiModalOpen] = useState(false);
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
   const [isAlimtalkModalOpen, setIsAlimtalkModalOpen] = useState(false);
-  const [isAlimtalkSending, setIsAlimtalkSending] = useState(false); 
+  const [isAlimtalkSending, setIsAlimtalkSending] = useState(false); // 알림톡 전송 중 상태
   
   const [postOptionsMenu, setPostOptionsMenu] = useState(null); 
   const [isReportPostModalOpen, setIsReportPostModalOpen] = useState(false);
@@ -215,35 +227,56 @@ export default function App() {
   const [feedFilter, setFeedFilter] = useState('전체'); 
   const [reportReason, setReportReason] = useState('');
   
+  // 카테고리 순서 변경: 전체, 인테리어, 청소, 미용, 건설, 기타
   const categories = ['전체', '인테리어', '청소', '미용', '건설', '기타'];
 
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
   const profilePicRef = useRef(null);
 
+  // 공용 메일 발송 함수 (EmailJS REST API 직접 호출)
   const sendEmailNotification = async (subject, message) => {
-    if (!EMAILJS_SERVICE_ID || EMAILJS_SERVICE_ID === "YOUR_SERVICE_ID") return;
+    if (!EMAILJS_SERVICE_ID || EMAILJS_SERVICE_ID === "YOUR_SERVICE_ID") {
+        console.warn("EmailJS 키가 아직 설정되지 않아 메일을 발송하지 못했습니다.");
+        return;
+    }
+    
     try {
         const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+            },
             body: JSON.stringify({
                 service_id: EMAILJS_SERVICE_ID,
                 template_id: EMAILJS_TEMPLATE_ID,
                 user_id: EMAILJS_PUBLIC_KEY,
-                template_params: { subject: subject, message: message }
+                template_params: {
+                    subject: subject,
+                    message: message,
+                }
             })
         });
-        if (!response.ok) console.error("EmailJS 전송 실패");
+
+        if (response.ok) {
+            console.log("EmailJS 전송 성공");
+        } else {
+            const errorText = await response.text();
+            console.error("EmailJS 전송 실패:", errorText);
+        }
     } catch (error) {
         console.error("EmailJS 네트워크 전송 에러:", error);
     }
   };
 
+  // 카카오톡 링크 공유 시 미리보기를 위한 동적 메타태그 변경 함수
   const updateMetaTags = (report) => {
     if (!report) return;
+    
+    // 타이틀 변경
     document.title = `${report.title} - 비포터`;
     
+    // 메타 태그 업데이트 유틸
     const setMeta = (property, content, isName = false) => {
       let element = document.querySelector(`meta[${isName ? 'name' : 'property'}="${property}"]`);
       if (!element) {
@@ -255,18 +288,24 @@ export default function App() {
       element.setAttribute('content', content);
     };
 
+    // 카카오톡에 멋지게 보이기 위한 상세 정보 세팅
     const description = `[${report.authorName}] 프로님의 작업 결과물을 확인해보시겠어요? \n📅 작업일: ${report.taskDate} \n📍 장소: ${report.location || '미상'}`;
-    const coverImg = report.spaces && report.spaces.length > 0 ? report.spaces[0].afterImg : (report.afterImg || 'https://www.beforeter.com/default-og.png');
+    
+    const coverImg = report.spaces && report.spaces.length > 0 
+      ? report.spaces[0].afterImg 
+      : (report.afterImg || 'https://www.beforeter.com/default-og.png');
 
+    // 카카오톡 스크랩봇을 위한 Open Graph 태그 강화
     setMeta('og:title', `${report.title} - 비포터`);
     setMeta('og:description', description);
     setMeta('og:image', coverImg);
     setMeta('og:type', 'website');
     setMeta('og:site_name', '비포터 (Beforeter)');
-    setMeta('description', description, true); 
+    setMeta('description', description, true); // 일반 검색엔진용
   };
 
   useEffect(() => {
+    // 앱 버전 확인 및 신규 배포 알림 로직
     const storedVersion = localStorage.getItem('beporter_version');
     if (storedVersion !== APP_VERSION) {
         setAppUpdateNoti({
@@ -277,10 +316,6 @@ export default function App() {
             isRead: false
         });
     }
-  }, []);
-
-  useEffect(() => {
-    if (!isAuthReady) return; // 💡 [수정됨] 인증이 완료된 후 라우팅 및 데이터 로드 진행
 
     const handleRouting = async (path, isPop = false) => {
         if (path === '/' || path === '') {
@@ -321,7 +356,7 @@ export default function App() {
     const popStateHandler = () => handleRouting(window.location.pathname, true);
     window.addEventListener('popstate', popStateHandler);
     return () => window.removeEventListener('popstate', popStateHandler);
-  }, [isAuthReady]);
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -331,23 +366,20 @@ export default function App() {
   }, [banners.length]);
 
   useEffect(() => {
+    // 💡 [추가됨] Canvas 환경에서의 데이터 접근 권한을 위한 자동 인증 처리 방어 코드
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
         }
-      } catch(e) {
+      } catch (e) {
         console.warn("Canvas auth fallback error", e);
       }
     };
     initAuth();
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setIsAuthReady(true); // 💡 [수정됨] 인증 상태 확인 완료
-      
-      if (user && !user.isAnonymous) { // 💡 [수정됨] 익명 사용자는 무시하고 실제 가입한 로그인 유저만 처리
+      if (user) {
         try {
           const userRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.uid);
           const userSnap = await getDoc(userRef);
@@ -357,7 +389,7 @@ export default function App() {
             name: user.displayName || '작업자', 
             company: '',
             bizNum: '',
-            bizStatus: 'none', 
+            bizStatus: 'none', // 사업자 검수 상태: none, pending, approved, rejected
             affiliation: '', 
             profilePic: user.photoURL || '', 
             intro: '', 
@@ -370,17 +402,20 @@ export default function App() {
           if (userSnap.exists()) {
             userData = { ...userData, ...userSnap.data(), id: user.uid };
           } else {
+            // 이메일 가입이 아닐 경우(소셜)에만 여기서 자동 생성
             if (userData.provider !== 'Email') {
               await setDoc(userRef, userData);
+              
+              // 💡 [EmailJS] 새로운 유저 가입 알림 메일 전송
               sendEmailNotification(
                   `[비포터] 🎉 새로운 작업자 회원가입!`,
-                  `이름: ${userData.name}\n이메일: ${userData.email}\n가입 플랫폼: ${userData.provider}\n\n새로운 회원이 비포터에 합류했습니다.`
+                  `이름: ${userData.name}\n이메일: ${userData.email}\n가입 플랫폼: ${userData.provider}\n\n새로운 회원이 비포터에 합류했습니다. 환영해 주세요!`
               );
             }
           }
           setCurrentUser(userData);
         } catch (error) {
-          console.error("사용자 DB 연동 중 오류 발생:", error);
+          console.error("사용자 DB 연동 중 오류 발생 (권한 등):", error);
           setCurrentUser({
             id: user.uid, 
             name: user.displayName || '작업자', 
@@ -390,6 +425,7 @@ export default function App() {
           });
         }
         
+        // 내 알림 실시간 동기화
         try {
           const notiQ = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'notifications'), where("targetUserId", "==", user.uid));
           onSnapshot(notiQ, (snap) => {
@@ -397,9 +433,10 @@ export default function App() {
             snap.forEach(d => notis.push({ id: d.id, ...d.data() }));
             notis.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
             setNotifications(notis);
-          }, (err) => console.error("알림 오류:", err));
+          }, (err) => console.error("알림 로드 오류:", err));
         } catch (e) { console.error(e); }
 
+        // 내가 보낸 피드백 히스토리 동기화
         try {
           const fbQ = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'feedbacks'), where("userId", "==", user.uid));
           onSnapshot(fbQ, (snap) => {
@@ -407,9 +444,10 @@ export default function App() {
             snap.forEach(d => fbs.push({ id: d.id, ...d.data() }));
             fbs.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
             setMyFeedbacks(fbs);
-          }, (err) => console.error("피드백 오류:", err));
+          }, (err) => console.error("피드백 로드 오류:", err));
         } catch (e) { console.error(e); }
 
+        // 👑 [관리자 전용] 사업자 검수 대기 목록 실시간 연동
         if (user.email === 'jinthemoon@kakao.com') {
             try {
                 const adminQ = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where("bizStatus", "==", "pending"));
@@ -418,7 +456,7 @@ export default function App() {
                     snap.forEach(d => pUsers.push({ id: d.id, ...d.data() }));
                     setPendingBizUsers(pUsers);
                 });
-            } catch (e) { console.error(e); }
+            } catch (e) { console.error("관리자 로드 오류:", e); }
         }
 
       } else { 
@@ -432,8 +470,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isAuthReady) return; // 💡 [수정됨] 인증이 완료된 후에만 데이터 읽기 수행
-
     const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'reports'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const reports = [];
@@ -450,7 +486,7 @@ export default function App() {
       }
     }, (error) => console.error("데이터 읽기 오류:", error));
     return () => unsubscribe();
-  }, [isAuthReady, detailReport]);
+  }, [detailReport]);
 
   useEffect(() => {
     if (currentView === 'upload' && shareLocation) {
@@ -505,7 +541,7 @@ export default function App() {
     setConfirmDialog({ show: true, msg, onConfirm: () => { action(); setConfirmDialog({show: false, msg:'', onConfirm:null}); } });
   };
 
-  // 🔥 이메일 기반 정식 회원가입 로직
+  // 💡 [추가됨] 이메일 기반 정식 회원가입 로직
   const processEmailSignup = async () => {
     if (!termsAgreed || !privacyAgreed) return showToast("서비스 이용약관 및 개인정보 수집에 동의해주세요.");
     if (!authName.trim() || !authPhone.trim() || !authEmail.trim() || !authPassword) {
@@ -534,6 +570,8 @@ export default function App() {
             createdAt: serverTimestamp()
         };
 
+        // 💡 [데이터 저장 위치 지정] 회원 정보가 저장되는 명확한 경로입니다.
+        // 데이터베이스 경로: artifacts -> beforeter-app -> public -> data -> users -> {user.uid}
         await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.uid), newUserData);
         
         sendEmailNotification(
@@ -550,7 +588,7 @@ export default function App() {
     }
   };
 
-  // 🔥 이메일 기반 로그인 로직
+  // 💡 [추가됨] 이메일 기반 로그인 로직
   const processEmailLogin = async () => {
     if (!authEmail.trim() || !authPassword) return showToast("이메일과 비밀번호를 입력해주세요.");
     try {
@@ -575,7 +613,11 @@ export default function App() {
       switchView('feed'); 
     } catch (error) { 
       console.error("구글 로그인 에러:", error);
-      showToast("구글 로그인에 실패했습니다."); 
+      if (error.code === 'auth/unauthorized-domain') {
+          triggerConfirm("Firebase 보안 알림: 현재 접속 중인 도메인이 Firebase 승인된 도메인에 등록되어 있지 않아 로그인이 차단되었습니다. Firebase 콘솔(Authentication > 설정)에서 도메인을 추가해주세요.", () => {});
+      } else {
+          showToast("구글 로그인에 실패했습니다."); 
+      }
     }
   };
 
@@ -584,14 +626,20 @@ export default function App() {
         return showToast("서비스 이용약관 및 개인정보 수집에 동의해주세요.");
     }
     try { 
-      kakaoProvider.setCustomParameters({ prompt: 'select_account' });
+      kakaoProvider.setCustomParameters({
+        prompt: 'select_account'
+      });
       await setPersistence(auth, browserLocalPersistence);
       await signInWithPopup(auth, kakaoProvider); 
       showToast(`환영합니다! 카카오톡 로그인이 완료되었습니다.`); 
       switchView('feed'); 
     } catch (error) { 
       console.error("카카오 로그인 에러:", error);
-      showToast("카카오 로그인에 실패했습니다. 관리자 설정(OIDC)을 확인해주세요."); 
+      if (error.code === 'auth/unauthorized-domain') {
+          triggerConfirm("Firebase 보안 알림: 현재 접속 중인 도메인이 Firebase 승인된 도메인에 등록되어 있지 않아 로그인이 차단되었습니다. Firebase 콘솔(Authentication > 설정)에서 도메인을 추가해주세요.", () => {});
+      } else {
+          showToast("카카오 로그인에 실패했습니다. 관리자 설정(OIDC)을 확인해주세요."); 
+      }
     }
   };
 
@@ -606,17 +654,23 @@ export default function App() {
     }
   };
 
+  // 사업자 등록번호 포맷팅 (###-##-####)
   const formatBizNum = (value) => {
     const raw = value.replace(/[^0-9]/g, '');
     let res = '';
-    if (raw.length < 4) res = raw;
-    else if (raw.length < 6) res = raw.substring(0, 3) + '-' + raw.substring(3);
-    else res = raw.substring(0, 3) + '-' + raw.substring(3, 5) + '-' + raw.substring(5, 10);
+    if (raw.length < 4) {
+      res = raw;
+    } else if (raw.length < 6) {
+      res = raw.substring(0, 3) + '-' + raw.substring(3);
+    } else {
+      res = raw.substring(0, 3) + '-' + raw.substring(3, 5) + '-' + raw.substring(5, 10);
+    }
     return res;
   };
 
   const handleBizNumChange = (e) => {
-    setEditBizNum(formatBizNum(e.target.value));
+    const formatted = formatBizNum(e.target.value);
+    setEditBizNum(formatted);
   };
 
   const openProfileEdit = () => { 
@@ -663,9 +717,11 @@ export default function App() {
     if (!editName.trim()) return showToast("이름을 입력해주세요.");
     
     const kwdArray = editKeywords.split(',').map(k => k.trim()).filter(k => k !== '').slice(0, 5);
+    
     let newBizStatus = currentUser.bizStatus || 'none';
     const isBizNumChanged = editBizNum !== currentUser.bizNum;
     
+    // 사업자 번호가 변경되었고 12자리(###-##-####)를 모두 채웠다면 검수 상태로 변경
     if (isBizNumChanged && editBizNum.length === 12) {
         newBizStatus = 'pending';
     } else if (editBizNum === '') {
@@ -690,18 +746,21 @@ export default function App() {
       showToast("프로필이 저장되었습니다.");
 
       if (newBizStatus === 'pending') {
+          // 💡 [EmailJS] 사업자 번호 제출 시 알림 메일 전송
           sendEmailNotification(
             `[비포터] 🏢 사업자 등록번호 검수 요청`,
             `사용자: ${currentUser.name} (${currentUser.id})\n상호명: ${editCompany}\n제출된 사업자등록번호: ${editBizNum}\n\n관리자 메뉴에서 검수를 진행해주세요.`
           );
           showToast("사업자 등록번호 검수가 요청되었습니다.");
       }
+
     } catch(e) { 
       console.error(e);
       showToast("프로필 저장에 실패했습니다."); 
     }
   };
 
+  // 👑 [관리자 전용] 사업자 승인 및 거절 함수
   const approveBiz = async (userId, userName) => {
     triggerConfirm(`[${userName}]님의 사업자를 승인하시겠습니까?`, async () => {
         try {
@@ -727,30 +786,42 @@ export default function App() {
   
   const triggerPhotoInput = (type) => { 
     setIsPhotoSheetOpen(false); 
-    if (type === 'camera') cameraInputRef.current.click(); 
-    else galleryInputRef.current.click();
+    if (type === 'camera') {
+      cameraInputRef.current.click(); 
+    } else {
+      galleryInputRef.current.click();
+    }
   };
   
   const handleFileSelect = (e) => {
     const file = e.target.files[0];
-    if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        alert("이미지 용량이 너무 큽니다. 10MB 이하의 사진만 업로드 가능합니다.");
-        e.target.value = ''; 
-        return;
-      }
-      if (currentPhotoTarget) {
-        resizeAndCompressImage(file, (compressedStr) => {
-          const newSpaces = [...spaces];
-          if (currentPhotoTarget.type === 'before') newSpaces[currentPhotoTarget.index].beforeImg = compressedStr;
-          else newSpaces[currentPhotoTarget.index].afterImg = compressedStr;
-          setSpaces(newSpaces);
-        }, 1000); 
-      }
-    }
-    e.target.value = ''; 
-  };
   
+  if (file) {
+    // 💡 10MB 이상 파일 업로드 차단 로직 추가
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+      alert("이미지 용량이 너무 큽니다. 10MB 이하의 사진만 업로드 가능합니다.");
+      e.target.value = ''; // 선택 초기화
+      return;
+    }
+
+    // 기존 리사이징 로직 실행
+    if (currentPhotoTarget) {
+      resizeAndCompressImage(file, (compressedStr) => {
+        const newSpaces = [...spaces];
+        if (currentPhotoTarget.type === 'before') {
+          newSpaces[currentPhotoTarget.index].beforeImg = compressedStr;
+        } else {
+          newSpaces[currentPhotoTarget.index].afterImg = compressedStr;
+        }
+        setSpaces(newSpaces);
+      }, 1000); 
+    }
+  }
+  e.target.value = ''; 
+};
+  
+
   const handleSpaceDescChange = (index, type, value) => {
     const newSpaces = [...spaces];
     if(type === 'desc') newSpaces[index].desc = value;
@@ -783,6 +854,7 @@ export default function App() {
       const uploadedSpaces = await Promise.all(spaces.map(async (sp, idx) => {
           let bUrl = sp.beforeImg; 
           let aUrl = sp.afterImg;
+          
           if(bUrl.startsWith('data:')) {
             const bRef = ref(storage, `reports/${currentUser.id}/${timeStamp}_${idx}_before.jpg`);
             await uploadString(bRef, bUrl, 'data_url'); 
@@ -814,9 +886,10 @@ export default function App() {
         createdAt: serverTimestamp()
       });
       
+      // 💡 [EmailJS] 새로운 리포트 등록 시 알림 메일 전송
       sendEmailNotification(
           `[비포터] 🚀 새로운 작업 리포트가 등록되었습니다!`,
-          `작성자: ${currentUser.name}\n작업 제목: ${taskTitle}\n\n리포트 바로가기: https://www.beforeter.com/report/${docRef.id}`
+          `작성자: ${currentUser.name}\n작업 제목: ${taskTitle}\n작업 일자: ${taskDate}\n카테고리: ${taskCategory}\n\n새로운 리포트가 성공적으로 업로드되었습니다.\n\n리포트 바로가기: https://www.beforeter.com/report/${docRef.id}`
       );
 
       setLatestReportId(docRef.id); 
@@ -834,6 +907,8 @@ export default function App() {
     setIsDetailLoading(true); 
     setDetailViewMode('horizontal'); 
     setFlippedCards({});
+    
+    // 리포트를 열 때 스크롤을 항상 가장 위로 올려줍니다.
     window.scrollTo({ top: 0, behavior: 'smooth' });
     
     try {
@@ -924,8 +999,12 @@ export default function App() {
     }
   };
 
+  // 💡 알림톡 전송 함수
   const sendAlimtalk = async () => {
-    if(alimtalkPhone.length < 10) return showToast("올바른 연락처를 입력해주세요.");
+    if(alimtalkPhone.length < 10) {
+        return showToast("올바른 연락처를 입력해주세요.");
+    }
+    
     setIsAlimtalkSending(true);
     showToast(`${alimtalkPhone} 번호로 알림톡 전송을 요청합니다...`);
 
@@ -935,7 +1014,8 @@ export default function App() {
         setIsAlimtalkModalOpen(false);
         setAlimtalkPhone('');
     } catch (error) {
-        showToast("알림톡 전송 중 오류가 발생했습니다.");
+        console.error("알림톡 전송 에러:", error);
+        showToast("알림톡 전송 중 오류가 발생했습니다. 나중에 다시 시도해주세요.");
     } finally {
         setIsAlimtalkSending(false);
     }
@@ -985,8 +1065,11 @@ export default function App() {
     const isLiked = report.likes?.includes(currentUser.id);
     let newLikes = report.likes || [];
     
-    if (isLiked) newLikes = newLikes.filter(id => id !== currentUser.id);
-    else newLikes.push(currentUser.id);
+    if (isLiked) {
+      newLikes = newLikes.filter(id => id !== currentUser.id);
+    } else {
+      newLikes.push(currentUser.id);
+    }
     
     try {
         const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', report.id);
@@ -1022,11 +1105,13 @@ export default function App() {
         createdAt: serverTimestamp()
       };
       
+      // DB 저장
       await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'feedbacks'), fbData);
 
+      // 💡 [EmailJS] 피드백 이메일 전송
       sendEmailNotification(
-          `[비포터] 💡 새로운 피드백 접수`,
-          `카테고리: ${feedbackCategory}\n\n내용:\n${feedbackText}`
+          `[비포터] 💡 새로운 피드백 접수: ${feedbackCategory}`,
+          `작성자: ${currentUser?.name || '익명'}\n이메일: ${fbData.email}\n카테고리: ${feedbackCategory}\n\n내용:\n${feedbackText}`
       );
 
       showToast("소중한 의견 감사합니다! 적극 검토하겠습니다. ❤️"); 
@@ -1034,11 +1119,14 @@ export default function App() {
       setFeedbackText(''); 
       setFeedbackCategory('기능 관련');
     } catch(e) { 
+      console.error("피드백 전송 에러:", e);
       showToast("오류가 발생했습니다. 네트워크를 확인해주세요."); 
     }
   };
 
-  const handleOpenNoti = () => { setIsNotiModalOpen(true); };
+  const handleOpenNoti = () => {
+    setIsNotiModalOpen(true);
+  };
 
   const markAllNotisAsRead = async () => {
     if (appUpdateNoti && !appUpdateNoti.isRead) {
@@ -1048,8 +1136,9 @@ export default function App() {
 
     notifications.forEach(async (noti) => {
       if(!noti.isRead) {
-        try { await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'notifications', noti.id), { isRead: true }); } 
-        catch (e) { console.error(e); }
+        try {
+          await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'notifications', noti.id), { isRead: true });
+        } catch (e) { console.error(e); }
       }
     });
 
@@ -1077,26 +1166,36 @@ export default function App() {
         reason: reportReason, 
         createdAt: serverTimestamp()
       });
+
+      sendEmailNotification(
+        `[비포터] 🚨 새로운 게시물 신고 접수`,
+        `신고자 ID: ${currentUser.id}\n신고자 이름: ${currentUser.name}\n신고된 게시물 ID: ${postOptionsMenu.reportId}\n\n신고 사유:\n${reportReason}`
+      );
+
       showToast("신고가 접수되었습니다. 관리자 검토 후 조치됩니다.");
       setIsReportPostModalOpen(false); 
       setReportReason(''); 
       setPostOptionsMenu(null);
     } catch(e) { 
-      showToast("신고 접수에 실패했습니다."); 
+      console.error(e);
+      showToast("신고 접수에 실패했습니다. 네트워크를 확인해주세요."); 
     }
   };
 
   const showPublicProfile = async (authorId, forceOpen = false) => {
     if(currentUser && currentUser.id === authorId && !forceOpen) { 
-      switchView('mypage'); return; 
+      switchView('mypage'); 
+      return; 
     }
     
     setIsDetailLoading(true);
     try {
       const userSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', authorId));
-      if(userSnap.exists()) setPublicProfileUser(userSnap.data()); 
-      else setPublicProfileUser({ id: authorId, name: '작업자', intro: '아직 자기소개를 등록하지 않았습니다.', keywords: [], profilePic: '' }); 
-      
+      if(userSnap.exists()) { 
+        setPublicProfileUser(userSnap.data()); 
+      } else { 
+        setPublicProfileUser({ id: authorId, name: '작업자', intro: '아직 자기소개를 등록하지 않았습니다.', keywords: [], profilePic: '' }); 
+      }
       setCurrentView('public-profile');
       if(!forceOpen) window.history.pushState({}, '', '/profile/' + authorId);
     } catch(e) { 
@@ -1112,15 +1211,23 @@ export default function App() {
     return displayStr;
   };
   
-  const toggleFlip = (idx) => { setFlippedCards(prev => ({ ...prev, [idx]: !prev[idx] })); };
+  const toggleFlip = (idx) => {
+    setFlippedCards(prev => ({ ...prev, [idx]: !prev[idx] }));
+  };
 
+  // 피드 필터 및 파생 데이터 처리
   const publicFeeds = feedData.filter(f => f.status === 'public' && !blockedUsers.includes(f.authorId));
-  const displayedFeeds = feedFilter === '전체' ? publicFeeds : publicFeeds.filter(f => (f.category || '기타') === feedFilter);
+  const displayedFeeds = feedFilter === '전체' 
+    ? publicFeeds 
+    : publicFeeds.filter(f => (f.category || '기타') === feedFilter);
+    
   const myFeeds = currentUser ? feedData.filter(f => f.authorId === currentUser.id) : [];
   const publicProfileFeeds = publicProfileUser ? publicFeeds.filter(f => f.authorId === publicProfileUser.id) : [];
+  
+  // 전체 읽지 않은 알림 개수 계산 (유저 개인 알림 + 시스템 업데이트 알림)
   const unreadNotis = notifications.filter(n => !n.isRead).length + (appUpdateNoti && !appUpdateNoti.isRead ? 1 : 0);
 
-  // 인증 폼 유효성 검사기
+  // 💡 [추가됨] 회원가입 폼 유효성 검사
   const isSignupValid = authName.trim() && authPhone.trim() && authEmail.trim() && authPassword.length >= 6 && termsAgreed && privacyAgreed;
   const isLoginValid = authEmail.trim() && authPassword.trim();
 
@@ -1145,20 +1252,24 @@ export default function App() {
     <div className="app-wrapper">
       <style>{`
         /* 글로벌 설정 및 초기화 */
-        html { overflow-y: scroll; }
+        html { 
+            overflow-y: scroll; 
+        }
         body { 
             font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; 
             background-color: #f3f4f6; 
-            margin: 0; padding: 0; color: #111827; 
+            margin: 0; 
+            padding: 0; 
+            color: #111827; 
             -webkit-tap-highlight-color: transparent; 
             overflow-x: hidden; 
         }
         
-        /* 디자인 토큰 개편: Black & White 모노톤 */
+        /* 💡 [디자인 수정] Black & White 모노톤 적용 및 Flat Design 설정 */
         :root { 
             --primary: #000000; 
             --primary-hover: #333333; 
-            --primary-light: #f3f4f6; 
+            --primary-light: #f9fafb; 
             --card-bg: #ffffff; 
             --text-main: #111827; 
             --text-sub: #6b7280; 
@@ -1170,43 +1281,81 @@ export default function App() {
         
         /* 레이아웃 컨테이너 */
         .app-wrapper { 
-            max-width: 480px; margin: 0 auto; min-height: 100vh; 
-            background-color: #ffffff; box-shadow: 0 0 2px rgba(0,0,0,0.1); 
-            position: relative; display: flex; flex-direction: column;
+            max-width: 480px; 
+            margin: 0 auto; 
+            min-height: 100vh; 
+            background-color: #ffffff; 
+            position: relative; 
+            display: flex; 
+            flex-direction: column;
         }
         
         /* 헤더 스타일링 */
         .app-header { 
-            position: sticky; top: 0; left: 0; width: 100%; height: 56px; 
-            background-color: var(--card-bg); display: flex; align-items: center; 
-            justify-content: space-between; padding: 0 16px; z-index: 50; 
-            border-bottom: 1px solid var(--border); box-sizing: border-box;
+            position: sticky; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 56px; 
+            background-color: var(--card-bg); 
+            display: flex; 
+            align-items: center; 
+            justify-content: space-between; 
+            padding: 0 16px; 
+            z-index: 50; 
+            border-bottom: 1px solid var(--border); 
+            box-sizing: border-box;
         }
         
         .header-icon { 
-            background: none; border: none; color: var(--text-main); font-size: 24px; 
-            cursor: pointer; padding: 8px; display: flex; align-items: center; 
-            justify-content: center; border-radius: 4px; transition: background-color 0.2s;
+            background: none; 
+            border: none; 
+            color: var(--text-main); 
+            font-size: 24px; 
+            cursor: pointer; 
+            padding: 8px; 
+            position: relative; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+            border-radius: 4px;
+            transition: background-color 0.2s;
         }
         
-        .header-icon:active { background-color: var(--primary-light); }
+        .header-icon:active {
+            background-color: var(--primary-light);
+        }
         
         .header-title { 
-            font-size: 18px; font-weight: 900; color: var(--primary); 
-            letter-spacing: -1px; cursor: pointer; 
+            font-size: 18px; 
+            font-weight: 900; 
+            color: var(--primary); 
+            letter-spacing: -0.5px; 
+            cursor: pointer; 
         }
         
         .view-section { 
-            padding-bottom: 100px; flex: 1; box-sizing: border-box; 
-            background: #ffffff; display: flex; flex-direction: column;
+            padding-bottom: 100px; 
+            flex: 1; 
+            box-sizing: border-box; 
+            background: #ffffff; 
+            display: flex;
+            flex-direction: column;
         }
         
         /* 컴포넌트: 브랜드 훅 카드 (배너) */
         .brand-hook-card { 
-            background: var(--primary); color: white; padding: 20px; 
-            border-radius: 8px; margin-bottom: 16px; text-align: left; 
-            min-height: 94px; box-sizing: border-box; display: flex; 
-            flex-direction: column; justify-content: center;
+            background: var(--primary); 
+            color: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin-bottom: 16px; 
+            text-align: left; 
+            min-height: 94px; 
+            box-sizing: border-box; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: center;
             border: 1px solid var(--primary);
         }
         
@@ -1215,189 +1364,690 @@ export default function App() {
             to { opacity: 1; transform: translateX(0); } 
         }
         
-        .brand-hook-card h3 { margin: 0 0 6px 0; font-size: 18px; font-weight: 800; }
-        .brand-hook-card p { margin: 0; font-size: 13px; opacity: 0.9; line-height: 1.4; }
-        
-        /* 컴포넌트: 필터 칩 */
-        .filter-scroll { 
-            display: flex; gap: 8px; overflow-x: auto; padding: 0 20px 16px 20px; margin: 0; scrollbar-width: none; 
+        .brand-hook-card h3 { 
+            margin: 0 0 6px 0; 
+            font-size: 18px; 
+            font-weight: 800; 
         }
-        .filter-scroll::-webkit-scrollbar { display: none; }
+        
+        .brand-hook-card p { 
+            margin: 0; 
+            font-size: 13px; 
+            opacity: 0.9; 
+            line-height: 1.4; 
+        }
+        
+        /* 컴포넌트: 필터 칩 스크롤 영역 */
+        .filter-scroll { 
+            display: flex; 
+            gap: 8px; 
+            overflow-x: auto; 
+            padding: 0 20px 16px 20px; 
+            margin: 0; 
+            scrollbar-width: none; 
+        }
+        
+        .filter-scroll::-webkit-scrollbar { 
+            display: none; 
+        }
         
         .filter-chip { 
-            padding: 8px 16px; border-radius: 4px; font-size: 13px; font-weight: 700; 
-            background: var(--card-bg); color: var(--text-sub); border: 1px solid var(--border); 
-            white-space: nowrap; cursor: pointer; transition: 0.2s; 
+            padding: 8px 16px; 
+            border-radius: 4px; 
+            font-size: 13px; 
+            font-weight: 700; 
+            background: var(--card-bg); 
+            color: var(--text-sub); 
+            border: 1px solid var(--border); 
+            white-space: nowrap; 
+            cursor: pointer; 
+            transition: 0.2s; 
         }
+        
         .filter-chip.active { 
-            background: var(--primary); color: white; border-color: var(--primary); 
+            background: var(--primary); 
+            color: white; 
+            border-color: var(--primary); 
         }
 
         /* 레이아웃: 사이드바 */
-        .sidebar-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100; opacity: 0; visibility: hidden; transition: all 0.3s; }
-        .sidebar-overlay.active { opacity: 1; visibility: visible; }
-        .sidebar { position: fixed; top: 0; left: -280px; width: 280px; height: 100%; background: white; z-index: 101; transition: all 0.3s; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
-        .sidebar.active { left: 0; }
+        .sidebar-overlay { 
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            background: rgba(0,0,0,0.5); 
+            z-index: 100; 
+            opacity: 0; 
+            visibility: hidden; 
+            transition: all 0.3s; 
+        }
         
-        /* 컴포넌트: 피드 카드 (Flat Design) */
-        .feed-container { padding: 16px; flex: 1; }
+        .sidebar-overlay.active { 
+            opacity: 1; 
+            visibility: visible; 
+        }
+        
+        .sidebar { 
+            position: fixed; 
+            top: 0; 
+            left: -280px; 
+            width: 280px; 
+            height: 100%; 
+            background: white; 
+            z-index: 101; 
+            transition: all 0.3s; 
+            display: flex; 
+            flex-direction: column; 
+            border-right: 1px solid var(--border);
+        }
+        
+        .sidebar.active { 
+            left: 0; 
+        }
+        
+        /* 컴포넌트: 피드 카드 */
+        .feed-container { 
+            padding: 16px; 
+            flex: 1;
+        }
+        
         .feed-card { 
-            background: var(--card-bg); border-radius: 8px; padding: 16px; margin-bottom: 20px; 
-            border: 1px solid var(--border); cursor: pointer; position: relative; 
+            background: var(--card-bg); 
+            border-radius: 8px; 
+            padding: 16px; 
+            margin-bottom: 20px; 
+            border: 1px solid var(--border); 
+            cursor: pointer; 
+            position: relative; 
         }
         
-        .feed-author { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+        .feed-author { 
+            display: flex; 
+            align-items: center; 
+            gap: 10px; 
+            margin-bottom: 12px; 
+        }
+        
         .author-avatar { 
-            width: 36px; height: 36px; background-color: var(--primary-light); 
-            border-radius: 50%; display: flex; align-items: center; justify-content: center; 
-            color: var(--primary-hover); font-weight: bold; font-size: 14px; overflow: hidden; cursor: pointer;
+            width: 36px; 
+            height: 36px; 
+            background-color: var(--primary-light); 
+            border-radius: 50%; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            color: var(--text-main); 
+            font-weight: bold; 
+            font-size: 14px; 
+            overflow: hidden; 
+            cursor: pointer;
+            border: 1px solid var(--border);
         }
-        .author-avatar img { width: 100%; height: 100%; object-fit: cover; }
-        .feed-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; line-height: 1.4; }
-        .feed-images { display: flex; gap: 8px; height: 160px; }
-        .feed-img-wrap { flex: 1; position: relative; border-radius: 4px; overflow: hidden; background-color: #e2e8f0; border: 1px solid var(--border); }
-        .feed-img-wrap img { width: 100%; height: 100%; object-fit: cover; }
         
-        .badge { position: absolute; top: 8px; left: 8px; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 800; color: white; background: rgba(0,0,0,0.8); }
-        .biz-badge { background: var(--text-main); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; margin-left: 6px; vertical-align: middle; }
-        .biz-badge.pending { background: #f3f4f6; color: var(--text-sub); border: 1px solid var(--border); }
-        .more-opts-btn { position: absolute; top: 16px; right: 16px; background: none; border: none; font-size: 18px; color: var(--text-sub); cursor: pointer; }
+        .author-avatar img { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+        }
+        
+        .feed-title { 
+            font-size: 16px; 
+            font-weight: 800; 
+            margin-bottom: 12px; 
+            line-height: 1.4; 
+        }
+        
+        .feed-images { 
+            display: flex; 
+            gap: 8px; 
+            height: 160px; 
+        }
+        
+        .feed-img-wrap { 
+            flex: 1; 
+            position: relative; 
+            border-radius: 4px; 
+            overflow: hidden; 
+            background-color: var(--primary-light); 
+            border: 1px solid var(--border);
+        }
+        
+        .feed-img-wrap img { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+        }
+        
+        .badge { 
+            position: absolute; 
+            top: 8px; 
+            left: 8px; 
+            padding: 4px 8px; 
+            border-radius: 4px; 
+            font-size: 11px; 
+            font-weight: 800; 
+            color: white; 
+            background: rgba(0,0,0,0.8); 
+        }
+        
+        .biz-badge {
+            background: var(--text-main);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+        
+        .biz-badge.pending {
+            background: var(--primary-light);
+            color: var(--text-sub);
+            border: 1px solid var(--border);
+        }
+
+        .more-opts-btn { 
+            position: absolute; 
+            top: 16px; 
+            right: 16px; 
+            background: none; 
+            border: none; 
+            font-size: 18px; 
+            color: var(--text-sub); 
+            cursor: pointer; 
+        }
         
         /* 컴포넌트: 디테일 뷰 */
         .detail-card { 
-            background: var(--card-bg); border-radius: 8px; padding: 20px; 
-            margin-bottom: 20px; border: 1px solid var(--border); 
+            background: var(--card-bg); 
+            border-radius: 8px; 
+            padding: 20px; 
+            margin-bottom: 20px; 
+            border: 1px solid var(--border); 
         }
-        .unified-desc { font-size: 14px; color: var(--text-main); background: #f9fafb; padding: 16px; border-radius: 4px; margin-top: 12px; line-height: 1.5; border: 1px solid var(--border); }
+        
+        .unified-desc { 
+            font-size: 14px; 
+            color: var(--text-main); 
+            background: var(--primary-light); 
+            padding: 16px; 
+            border-radius: 4px; 
+            margin-top: 12px; 
+            line-height: 1.5; 
+            border: 1px solid var(--border); 
+        }
         
         /* 컴포넌트: 뷰 모드 컨트롤 */
-        .view-mode-control { display: flex; background: var(--primary-light); padding: 4px; border-radius: 4px; margin-bottom: 20px; gap: 4px; border: 1px solid var(--border); }
-        .view-mode-btn { flex: 1; padding: 10px; text-align: center; font-size: 13px; font-weight: 700; border-radius: 4px; cursor: pointer; color: var(--text-sub); transition: 0.2s; }
-        .view-mode-btn.active { background: white; color: var(--text-main); border: 1px solid var(--border); }
+        .view-mode-control { 
+            display: flex; 
+            background: var(--primary-light); 
+            padding: 4px; 
+            border-radius: 4px; 
+            margin-bottom: 20px; 
+            gap: 4px; 
+            border: 1px solid var(--border);
+        }
+        
+        .view-mode-btn { 
+            flex: 1; 
+            padding: 10px; 
+            text-align: center; 
+            font-size: 13px; 
+            font-weight: 700; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            color: var(--text-sub); 
+            transition: 0.2s; 
+        }
+        
+        .view-mode-btn.active { 
+            background: white; 
+            color: var(--text-main); 
+            border: 1px solid var(--border);
+        }
         
         /* 컴포넌트: 3D 플립 카드 (한 장 보기) */
-        .flip-card { perspective: 1000px; width: 100%; height: 260px; cursor: pointer; border-radius: 4px; }
-        .flip-card-inner { position: relative; width: 100%; height: 100%; transition: transform 0.6s; transform-style: preserve-3d; }
-        .flip-card.flipped .flip-card-inner { transform: rotateY(180deg); }
-        .flip-card-front, .flip-card-back { position: absolute; width: 100%; height: 100%; backface-visibility: hidden; border-radius: 4px; overflow: hidden; background-color: #e2e8f0; border: 1px solid var(--border); }
-        .flip-card-back { transform: rotateY(180deg); }
-        .noti-badge { position: absolute; top: 4px; right: 4px; background: var(--danger); color: white; font-size: 10px; font-weight: bold; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+        .flip-card { 
+            perspective: 1000px; 
+            width: 100%; 
+            height: 260px; 
+            cursor: pointer; 
+            border-radius: 4px; 
+        }
+        
+        .flip-card-inner { 
+            position: relative; 
+            width: 100%; 
+            height: 100%; 
+            transition: transform 0.6s; 
+            transform-style: preserve-3d; 
+        }
+        
+        .flip-card.flipped .flip-card-inner { 
+            transform: rotateY(180deg); 
+        }
+        
+        .flip-card-front, .flip-card-back { 
+            position: absolute; 
+            width: 100%; 
+            height: 100%; 
+            backface-visibility: hidden; 
+            border-radius: 4px; 
+            overflow: hidden; 
+            background-color: var(--primary-light); 
+            border: 1px solid var(--border);
+        }
+        
+        .flip-card-back { 
+            transform: rotateY(180deg); 
+        }
+        
+        .noti-badge { 
+            position: absolute; 
+            top: 4px; 
+            right: 4px; 
+            background: var(--danger); 
+            color: white; 
+            font-size: 10px; 
+            font-weight: bold; 
+            width: 16px; 
+            height: 16px; 
+            border-radius: 50%; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+        }
 
-        /* 뷰: 로그인 & 회원가입 화면 (개편) */
+        /* 💡 [수정됨] 뷰: 로그인 화면 레이아웃 변경 (탭 형태 도입) */
         .login-container { 
-            display: flex; flex-direction: column; align-items: stretch; 
-            justify-content: flex-start; height: 100%; padding: 24px; 
-            text-align: left; box-sizing: border-box;
+            display: flex; 
+            flex-direction: column; 
+            align-items: stretch; 
+            justify-content: flex-start; 
+            height: 100%; 
+            padding: 24px; 
+            text-align: left; 
+            box-sizing: border-box;
         }
         
-        .auth-tabs { display: flex; margin-bottom: 24px; border-bottom: 2px solid var(--border); }
-        .auth-tabs button { flex: 1; background: none; border: none; padding: 12px 0; font-size: 16px; font-weight: 700; color: var(--text-sub); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
-        .auth-tabs button.active-tab { color: var(--text-main); border-bottom: 2px solid var(--text-main); }
+        .auth-tabs {
+            display: flex;
+            margin-bottom: 24px;
+            border-bottom: 2px solid var(--border);
+        }
+        
+        .auth-tabs button {
+            flex: 1;
+            background: none;
+            border: none;
+            padding: 12px 0;
+            font-size: 16px;
+            font-weight: 800;
+            color: var(--text-sub);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+        
+        .auth-tabs button.active-tab {
+            color: var(--text-main);
+            border-bottom: 2px solid var(--text-main);
+        }
+        
+        .auth-form {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
 
-        .auth-form { display: flex; flex-direction: column; width: 100%; }
-        
         .social-btn { 
-            width: 100%; padding: 16px; border-radius: 4px; font-size: 15px; font-weight: 700; 
-            cursor: pointer; border: 1px solid var(--border); display: flex; align-items: center; 
-            justify-content: center; gap: 12px; background: white; margin-bottom: 12px; transition: background 0.2s; color: var(--text-main);
+            width: 100%; 
+            padding: 16px; 
+            border-radius: 4px; 
+            font-size: 15px; 
+            font-weight: 700; 
+            cursor: pointer; 
+            border: 1px solid var(--border); 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            gap: 12px; 
+            background: white; 
+            margin-bottom: 12px; 
+            color: var(--text-main);
+            transition: background 0.2s; 
         }
-        .social-btn.kakao { background-color: var(--kakao); color: var(--kakao-text); border-color: var(--kakao); }
-        .social-btn:hover { filter: brightness(0.95); }
+        
+        .social-btn.kakao {
+            background-color: var(--kakao);
+            color: var(--kakao-text);
+            border-color: var(--kakao);
+        }
+        
+        .social-btn:hover { 
+            filter: brightness(0.95);
+        }
         
         /* 컴포넌트: 입력 폼 */
-        .input-group { margin-bottom: 20px; text-align: left; width: 100%; }
-        .title-label { display: block; font-size: 13px; font-weight: 700; color: var(--text-main); margin-bottom: 8px; }
-        .title-input { 
-            width: 100%; padding: 14px; border: 1px solid var(--border); border-radius: 4px; 
-            font-size: 15px; box-sizing: border-box; background-color: #f9fafb; font-family: inherit; 
-            transition: border-color 0.2s; color: var(--text-main);
+        .input-group { 
+            margin-bottom: 20px; 
+            text-align: left; 
+            width: 100%;
         }
-        .title-input:focus { outline: none; border-color: var(--text-main); background-color: white; }
+        
+        .title-label { 
+            display: block; 
+            font-size: 13px; 
+            font-weight: 700; 
+            color: var(--text-main); 
+            margin-bottom: 8px; 
+        }
+        
+        .title-input { 
+            width: 100%; 
+            padding: 14px; 
+            border: 1px solid var(--border); 
+            border-radius: 4px; 
+            font-size: 15px; 
+            box-sizing: border-box; 
+            background-color: var(--primary-light); 
+            font-family: inherit; 
+            color: var(--text-main);
+            transition: border-color 0.2s, background-color 0.2s;
+        }
+        
+        .title-input:focus {
+            outline: none;
+            border-color: var(--text-main);
+            background-color: white;
+        }
         
         .photo-upload { 
-            position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; 
-            width: 100%; height: 160px; background-color: #f9fafb; border: 1px dashed var(--text-sub); 
-            border-radius: 4px; cursor: pointer; color: var(--text-sub); font-size: 14px; font-weight: 700; overflow: hidden; 
+            position: relative; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            width: 100%; 
+            height: 160px; 
+            background-color: var(--primary-light); 
+            border: 1px dashed var(--text-sub); 
+            border-radius: 4px; 
+            cursor: pointer; 
+            color: var(--text-sub); 
+            font-size: 14px; 
+            font-weight: 700; 
+            overflow: hidden; 
         }
-        .photo-upload img.preview { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; }
         
-        /* 컴포넌트: 버튼 및 FAB */
+        .photo-upload img.preview { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+            z-index: 10; 
+        }
+        
+        /* 컴포넌트: 하단 메인 버튼 및 FAB */
         .submit-btn { 
-            width: 100%; padding: 18px; background-color: var(--text-main); color: white; 
-            border: 1px solid var(--text-main); border-radius: 4px; font-size: 16px; font-weight: 700; 
-            margin-top: 10px; cursor: pointer; 
+            width: 100%; 
+            padding: 18px; 
+            background-color: var(--text-main); 
+            color: white; 
+            border: 1px solid var(--text-main); 
+            border-radius: 4px; 
+            font-size: 16px; 
+            font-weight: 800; 
+            margin-top: 10px; 
+            cursor: pointer; 
         }
-        .submit-btn:disabled { background-color: #9ca3af; border-color: #9ca3af; cursor: not-allowed; }
+
+        .submit-btn:disabled {
+            background-color: #9ca3af;
+            border-color: #9ca3af;
+            cursor: not-allowed;
+        }
         
-        .fab-container { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; display: flex; justify-content: center; z-index: 40; pointer-events: none; }
+        .fab-container { 
+            position: fixed; 
+            bottom: 24px; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            width: 100%; 
+            max-width: 480px; 
+            display: flex; 
+            justify-content: center; 
+            z-index: 40; 
+            pointer-events: none; 
+        }
+        
         .fab-btn { 
-            pointer-events: auto; background-color: var(--primary); color: white; border: 1px solid var(--primary); 
-            padding: 16px 28px; border-radius: 8px; font-size: 15px; font-weight: 700; display: flex; 
-            align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); cursor: pointer; 
+            pointer-events: auto; 
+            background-color: var(--text-main); 
+            color: white; 
+            border: 1px solid var(--text-main); 
+            padding: 16px 28px; 
+            border-radius: 4px; 
+            font-size: 15px; 
+            font-weight: 800; 
+            display: flex; 
+            align-items: center; 
+            gap: 8px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15); 
+            cursor: pointer; 
         }
         
         /* 레이아웃: 모달 및 바텀 시트 */
-        .modal-overlay, .bottom-sheet-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 200; opacity: 0; visibility: hidden; transition: all 0.3s; }
-        .modal-overlay.active, .bottom-sheet-overlay.active { opacity: 1; visibility: visible; }
-        .modal-content { 
-            background: white; width: 90%; max-width: 360px; border-radius: 8px; padding: 28px 24px; 
-            box-sizing: border-box; text-align: center; position: absolute; top: 50%; left: 50%; 
-            transform: translate(-50%, -50%); max-height: 80vh; overflow-y: auto; border: 1px solid var(--border);
+        .modal-overlay, .bottom-sheet-overlay { 
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            background: rgba(0,0,0,0.6); 
+            z-index: 200; 
+            opacity: 0; 
+            visibility: hidden; 
+            transition: all 0.3s; 
         }
-        .bottom-sheet { position: fixed; bottom: -100%; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: white; border-radius: 8px 8px 0 0; z-index: 201; padding: 24px 20px; box-sizing: border-box; transition: bottom 0.3s; border-top: 1px solid var(--border); border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
-        .bottom-sheet.active { bottom: 0; }
+        
+        .modal-overlay.active, .bottom-sheet-overlay.active { 
+            opacity: 1; 
+            visibility: visible; 
+        }
+        
+        .modal-content { 
+            background: white; 
+            width: 90%; 
+            max-width: 360px; 
+            border-radius: 8px; 
+            padding: 28px 24px; 
+            box-sizing: border-box; 
+            text-align: center; 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            max-height: 80vh; 
+            overflow-y: auto; 
+            border: 1px solid var(--border);
+        }
+        
+        .bottom-sheet { 
+            position: fixed; 
+            bottom: -100%; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            width: 100%; 
+            max-width: 480px; 
+            background: white; 
+            border-radius: 8px 8px 0 0; 
+            z-index: 201; 
+            padding: 24px 20px; 
+            box-sizing: border-box; 
+            transition: bottom 0.3s; 
+            border-top: 1px solid var(--border);
+            border-left: 1px solid var(--border);
+            border-right: 1px solid var(--border);
+        }
+        
+        .bottom-sheet.active { 
+            bottom: 0; 
+        }
         
         .sheet-btn { 
-            width: 100%; padding: 16px; background: var(--primary-light); border: 1px solid var(--border); 
-            border-radius: 4px; font-size: 15px; font-weight: 700; margin-bottom: 12px; cursor: pointer; color: var(--text-main);
+            width: 100%; 
+            padding: 16px; 
+            background: var(--primary-light); 
+            border: 1px solid var(--border); 
+            border-radius: 4px; 
+            font-size: 15px; 
+            font-weight: 700; 
+            margin-bottom: 12px; 
+            cursor: pointer; 
+            color: var(--text-main);
         }
-        .sheet-btn.cancel { background: white; border: 1px solid var(--border); color: var(--text-sub); margin-top: 8px; }
         
-        /* 컴포넌트: 토스트 */
-        .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); background-color: var(--text-main); color: white; padding: 12px 24px; border-radius: 4px; font-size: 14px; font-weight: 700; z-index: 1000; opacity: 0; transition: all 0.3s; white-space: nowrap; pointer-events: none; }
-        .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+        .sheet-btn.cancel { 
+            background: white; 
+            border: 1px solid var(--border); 
+            color: var(--text-sub); 
+            margin-top: 8px; 
+        }
+        
+        /* 컴포넌트: 토스트 및 기타 */
+        .toast { 
+            position: fixed; 
+            bottom: 30px; 
+            left: 50%; 
+            transform: translateX(-50%) translateY(100px); 
+            background-color: var(--text-main); 
+            color: white; 
+            padding: 12px 24px; 
+            border-radius: 4px; 
+            font-size: 14px; 
+            font-weight: 700; 
+            z-index: 1000; 
+            opacity: 0; 
+            transition: all 0.3s; 
+            white-space: nowrap; 
+            pointer-events: none; 
+        }
+        
+        .toast.show { 
+            transform: translateX(-50%) translateY(0); 
+            opacity: 1; 
+        }
 
-        .checkbox-label { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; font-weight: 600; color: var(--text-sub); cursor: pointer; margin-bottom: 12px; }
-        .checkbox-label input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--text-main); flex-shrink: 0; margin-top: 2px; }
+        .checkbox-label { 
+            display: flex; 
+            align-items: flex-start; 
+            gap: 10px; 
+            font-size: 13px; 
+            font-weight: 600; 
+            color: var(--text-sub); 
+            cursor: pointer; 
+            margin-bottom: 12px;
+        }
+        
+        .checkbox-label input[type="checkbox"] { 
+            width: 18px; 
+            height: 18px; 
+            accent-color: var(--text-main); 
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
 
-        /* 컴포넌트: 하단 푸터 */
-        .common-footer { background-color: #f9fafb; padding: 32px 20px; border-top: 1px solid var(--border); text-align: center; margin-top: auto; }
-        .footer-links { margin-bottom: 16px; font-size: 13px; font-weight: 700; color: var(--text-sub); }
-        .footer-links span { cursor: pointer; }
-        .footer-links .divider { margin: 0 10px; color: var(--border); cursor: default; }
-        .footer-info { font-size: 12px; color: #9ca3af; line-height: 1.6; }
-        .footer-info p { margin: 0 0 4px 0; }
-        .footer-info .copyright { margin-top: 12px; font-weight: 700; color: var(--text-sub); }
+        /* 컴포넌트: 하단 푸터 (Footer) */
+        .common-footer {
+            background-color: var(--primary-light);
+            padding: 32px 20px;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            margin-top: auto;
+        }
+        
+        .footer-links {
+            margin-bottom: 16px;
+            font-size: 13px;
+            font-weight: 800;
+            color: var(--text-sub);
+        }
+        
+        .footer-links span {
+            cursor: pointer;
+        }
+        
+        .footer-links .divider {
+            margin: 0 10px;
+            color: var(--border);
+            cursor: default;
+        }
+        
+        .footer-info {
+            font-size: 12px;
+            color: #9ca3af;
+            line-height: 1.6;
+        }
+        
+        .footer-info p {
+            margin: 0 0 4px 0;
+        }
+        
+        .footer-info .copyright {
+            margin-top: 12px;
+            font-weight: 800;
+            color: var(--text-sub);
+        }
       `}</style>
       
+      {/* 시스템 카메라, 갤러리 호출용 Hidden Input */}
       <div style={{ position: 'absolute', width: '1px', height: '1px', padding: 0, margin: '-1px', overflow: 'hidden', clip: 'rect(0,0,0,0)', border: 0 }}>
         <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} />
         <input type="file" accept="image/*" ref={galleryInputRef} onChange={handleFileSelect} />
         <input type="file" accept="image/*" ref={profilePicRef} onChange={handleProfilePicSelect} />
       </div>
 
+      {/* 상단 공통 헤더 */}
       <header className="app-header">
         <button className="header-icon" onClick={toggleMenu}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
         </button>
         <div className="header-title" onClick={() => switchView('feed')}>비포터</div>
         <button className="header-icon" onClick={handleOpenNoti}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+          </svg>
           {unreadNotis > 0 && <span className="noti-badge">{unreadNotis}</span>}
         </button>
       </header>
 
+      {/* 공통 사이드바 메뉴 */}
       <div className={`sidebar-overlay ${isMenuOpen ? 'active' : ''}`} onClick={toggleMenu}></div>
       <div className={`sidebar ${isMenuOpen ? 'active' : ''}`}>
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             <div className="sidebar-header" style={{padding:'30px 20px', background:'var(--primary-light)', borderBottom:'1px solid var(--border)'}}>
               {currentUser ? (
                 <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
-                  <div className="author-avatar" style={{width:'48px', height:'48px', fontSize:'20px', background:'white', border:'1px solid var(--border)'}} onClick={() => {setIsMenuOpen(false); setSelectedImage(currentUser.profilePic);}}>
-                    {currentUser.profilePic ? <img src={currentUser.profilePic} alt="프로필" /> : (currentUser.name || '작업자').charAt(0)}
+                  <div className="author-avatar" style={{width:'48px', height:'48px', fontSize:'20px', background:'white'}} onClick={() => {setIsMenuOpen(false); setSelectedImage(currentUser.profilePic);}}>
+                    {currentUser.profilePic ? (
+                      <img src={currentUser.profilePic} alt="프로필" />
+                    ) : (
+                      (currentUser.name || '작업자').charAt(0)
+                    )}
                   </div>
                   <div>
-                    <h2 style={{margin:0, color:'var(--text-main)', fontSize:'18px', fontWeight:800}}>
+                    <h2 style={{margin:0, color:'var(--text-main)', fontSize:'18px', fontWeight:900}}>
                         {currentUser.name}
                         {currentUser.bizStatus === 'pending' && <span className="biz-badge pending">검수중</span>}
                     </h2>
@@ -1408,7 +2058,7 @@ export default function App() {
                 <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
                   <div style={{width:'48px', height:'48px', background:'white', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'20px', fontWeight:'bold', color:'var(--border)', border:'1px solid var(--border)'}}>?</div>
                   <div>
-                    <h2 style={{margin:0, color:'var(--text-main)', fontSize:'18px', fontWeight:800}}>비포터</h2>
+                    <h2 style={{margin:0, color:'var(--text-main)', fontSize:'18px', fontWeight:900}}>비포터</h2>
                     <p style={{margin:0, fontSize:'13px', color:'var(--text-sub)'}}>로그인 후 이용해보세요</p>
                   </div>
                 </div>
@@ -1437,46 +2087,49 @@ export default function App() {
               </li>
             </ul>
             
-            <ul style={{listStyle:'none', padding:0, margin:0, borderTop:'1px solid var(--border)', background:'#f9fafb'}}>
+            <ul style={{listStyle:'none', padding:0, margin:0, borderTop:'1px solid var(--border)', background:'var(--primary-light)'}}>
               {currentUser ? (
                 <li>
-                  <button onClick={processLogout} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--danger)', fontSize:'14px', fontWeight:700, cursor:'pointer'}}>🚪 로그아웃</button>
+                  <button onClick={processLogout} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--danger)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🚪 로그아웃</button>
                 </li>
               ) : (
                 <li>
-                  <button onClick={() => { setIsMenuOpen(false); switchView('login'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'14px', fontWeight:700, cursor:'pointer'}}>🔐 로그인 / 회원가입</button>
+                  <button onClick={() => { setIsMenuOpen(false); switchView('login'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🔐 로그인 / 회원가입</button>
                 </li>
               )}
             </ul>
         </div>
       </div>
 
+      {/* 👑 뷰: 관리자 (사업자 검수) */}
       {currentView === 'admin' && currentUser?.email === 'jinthemoon@kakao.com' && (
         <div className="view-section">
           <div style={{padding:'20px', textAlign:'center', background:'var(--primary-light)', borderBottom:'1px solid var(--border)'}}>
-            <h2 style={{margin:0, color:'var(--text-main)', fontSize:'20px'}}>사업자 검수 관리</h2>
+            <h2 style={{margin:0, color:'var(--text-main)', fontSize:'20px', fontWeight:900}}>사업자 검수 관리</h2>
             <p style={{margin:'8px 0 0 0', fontSize:'13px', color:'var(--text-sub)'}}>대기중: {pendingBizUsers.length}명</p>
           </div>
           <div className="feed-container">
             {pendingBizUsers.length === 0 ? (
-                <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)', fontWeight:700}}>대기 중인 요청이 없습니다.</div>
+                <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)', fontWeight:700}}>
+                    대기 중인 요청이 없습니다.
+                </div>
             ) : (
                 pendingBizUsers.map(user => (
                     <div key={user.id} className="feed-card" style={{border:'2px solid var(--text-main)'}}>
                         <div style={{display:'flex', gap:'12px', alignItems:'center', marginBottom:'16px'}}>
-                            <div className="author-avatar" style={{border:'1px solid var(--border)'}}>{user.name.charAt(0)}</div>
+                            <div className="author-avatar">{user.name.charAt(0)}</div>
                             <div>
                                 <h3 style={{margin:0, fontSize:'16px'}}>{user.name} <span style={{fontSize:'12px', color:'var(--text-sub)'}}>({user.email})</span></h3>
                                 <p style={{margin:'4px 0 0 0', fontSize:'14px', fontWeight:'700'}}>{user.company}</p>
                             </div>
                         </div>
-                        <div style={{background:'#f9fafb', padding:'12px', borderRadius:'4px', marginBottom:'16px', border:'1px solid var(--border)'}}>
+                        <div style={{background:'var(--primary-light)', padding:'12px', borderRadius:'4px', marginBottom:'16px', border:'1px solid var(--border)'}}>
                             <p style={{margin:0, fontSize:'13px', color:'var(--text-sub)'}}>제출된 사업자번호:</p>
-                            <p style={{margin:'4px 0 0 0', fontSize:'16px', fontWeight:'800', letterSpacing:'1px'}}>{user.bizNum}</p>
+                            <p style={{margin:'4px 0 0 0', fontSize:'16px', fontWeight:'900', letterSpacing:'1px'}}>{user.bizNum}</p>
                         </div>
                         <div style={{display:'flex', gap:'10px'}}>
                             <button className="sheet-btn cancel" style={{margin:0, flex:1}} onClick={() => rejectBiz(user.id, user.name)}>거절</button>
-                            <button className="sheet-btn" style={{margin:0, flex:1, background:'var(--text-main)', color:'white'}} onClick={() => approveBiz(user.id, user.name)}>승인</button>
+                            <button className="sheet-btn" style={{margin:0, flex:1, background:'var(--text-main)', color:'white', border:'none'}} onClick={() => approveBiz(user.id, user.name)}>승인하기</button>
                         </div>
                     </div>
                 ))
@@ -1485,6 +2138,7 @@ export default function App() {
         </div>
       )}
 
+      {/* 뷰: 피드 홈 */}
       {currentView === 'feed' && (
         <div className="view-section">
           <div className="feed-container" style={{paddingBottom:0}}>
@@ -1502,8 +2156,8 @@ export default function App() {
 
           <div className="feed-container" style={{paddingTop:0}}>
             {displayedFeeds.length === 0 ? (
-              <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)', display:'flex', flexDirection:'column', alignItems:'center'}}>
-                <p style={{ margin: 0, fontWeight: 700 }}>등록된 리포트가 없습니다.</p>
+              <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)', display:'flex', flexDirection:'column', alignItems:'center', gap:'12px'}}>
+                <p style={{ margin: 0, fontWeight: 700 }}>아직 등록된 리포트가 없습니다.</p>
               </div>
             ) : (
               displayedFeeds.map((item) => {
@@ -1520,10 +2174,10 @@ export default function App() {
                         {item.authorPic ? <img src={item.authorPic} alt="프로필" /> : (item.authorName || '작업자').charAt(0)}
                       </div>
                       <div>
-                        <span onClick={(e) => {e.stopPropagation(); showPublicProfile(item.authorId);}} style={{cursor:'pointer', fontWeight: 700}}>
+                        <span onClick={(e) => {e.stopPropagation(); showPublicProfile(item.authorId);}} style={{cursor:'pointer', fontWeight:800}}>
                             {item.authorName || '작업자'} <span style={{fontSize:'12px', color:'var(--text-sub)'}}>[{item.category || '기타'}]</span>
                         </span>
-                        <p className="author-time" style={{margin:'2px 0 0 0', fontSize:'12px', color:'var(--text-sub)'}}>{formatDisplayTime(item)}</p>
+                        <p style={{margin:'2px 0 0 0', fontSize:'12px', color:'var(--text-sub)', fontWeight:600}}>{formatDisplayTime(item)}</p>
                       </div>
                     </div>
                     
@@ -1534,7 +2188,7 @@ export default function App() {
                         <img src={renderSpaces[0].beforeImg} alt="Before" />
                       </div>
                       <div className="feed-img-wrap">
-                        <span className="badge" style={{ background: 'var(--text-main)', color: 'white', border: '1px solid white' }}>After</span>
+                        <span className="badge" style={{ background: 'white', color:'var(--text-main)' }}>After</span>
                         <img src={renderSpaces[0].afterImg} alt="After" />
                       </div>
                     </div>
@@ -1560,119 +2214,125 @@ export default function App() {
           <div className="fab-container">
             <button className="fab-btn" onClick={() => checkAuthAndAction(() => switchView('upload'))}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-              리포트 등록
+              내 리포트 올리기
             </button>
           </div>
         </div>
       )}
 
-      {/* 🔥 개편된 로그인 & 회원가입 화면 */}
+      {/* 💡 [수정됨] 뷰: 로그인 & 회원가입 화면 */}
       {currentView === 'login' && (
         <div className="view-section" style={{ display:'flex', background:'white' }}>
           <div className="login-container">
-            
-            <h1 style={{margin:'0 0 8px 0', color:'var(--text-main)', fontSize:'26px', fontWeight:'900', letterSpacing: '-1px'}}>
-              {authMode === 'login' ? '비포터에 오신 것을\n환영합니다.' : '지금 바로 비포터를\n시작해보세요.'}
+            <div style={{width:'64px', height:'64px', background:'var(--text-main)', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:'32px', fontWeight:'900', marginBottom:'20px'}}>B</div>
+            <h1 style={{margin:'0 0 8px 0', color:'var(--text-main)', fontSize:'24px', fontWeight:'900', letterSpacing:'-0.5px'}}>
+                {authMode === 'login' ? '비포터 시작하기' : '정식 회원가입'}
             </h1>
-            <p style={{margin:'0 0 32px 0', color:'var(--text-sub)', fontSize:'14px', whiteSpace: 'pre-line'}}>
-              {authMode === 'login' ? '당신의 전문성을 증명하는 가장 확실한 방법.' : '전문적인 작업 리포트를 단 10초만에.'}
+            <p style={{margin:'0 0 32px 0', color:'var(--text-sub)', fontSize:'14px'}}>
+                {authMode === 'login' ? '1분 만에 가입하고 신뢰를 공유하세요.' : '전문적인 작업 리포트를 만들어보세요.'}
             </p>
-
+            
             <div className="auth-tabs">
-              <button className={authMode === 'login' ? 'active-tab' : 'tab'} onClick={() => setAuthMode('login')}>로그인</button>
-              <button className={authMode === 'signup' ? 'active-tab' : 'tab'} onClick={() => setAuthMode('signup')}>정식 회원가입</button>
+                <button className={authMode === 'login' ? 'active-tab' : 'tab'} onClick={() => setAuthMode('login')}>로그인</button>
+                <button className={authMode === 'signup' ? 'active-tab' : 'tab'} onClick={() => setAuthMode('signup')}>이메일 회원가입</button>
             </div>
 
             {authMode === 'signup' ? (
-              <div className="auth-form">
-                <div className="input-group">
-                  <label className="title-label">이름 (또는 상호명)</label>
-                  <input type="text" className="title-input" placeholder="실명을 입력해주세요" value={authName} onChange={(e)=>setAuthName(e.target.value)} />
-                </div>
-                <div className="input-group">
-                  <label className="title-label">전화번호</label>
-                  <input type="tel" className="title-input" placeholder="숫자만 입력 (예: 01012345678)" value={authPhone} onChange={(e)=>setAuthPhone(e.target.value.replace(/[^0-9]/g, ''))} />
-                </div>
-                <div className="input-group">
-                  <label className="title-label">이메일 주소</label>
-                  <input type="email" className="title-input" placeholder="example@email.com" value={authEmail} onChange={(e)=>setAuthEmail(e.target.value)} />
-                </div>
-                <div className="input-group">
-                  <label className="title-label">비밀번호</label>
-                  <input type="password" className="title-input" placeholder="6자리 이상 입력" value={authPassword} onChange={(e)=>setAuthPassword(e.target.value)} />
-                </div>
+                <div className="auth-form">
+                    <div className="input-group">
+                        <label className="title-label">이름 (또는 상호명)</label>
+                        <input type="text" className="title-input" placeholder="실명을 입력해주세요" value={authName} onChange={(e)=>setAuthName(e.target.value)} />
+                    </div>
+                    <div className="input-group">
+                        <label className="title-label">전화번호</label>
+                        <input type="tel" className="title-input" placeholder="숫자만 입력 (예: 01012345678)" value={authPhone} onChange={(e)=>setAuthPhone(e.target.value.replace(/[^0-9]/g, ''))} />
+                    </div>
+                    <div className="input-group">
+                        <label className="title-label">이메일 주소</label>
+                        <input type="email" className="title-input" placeholder="example@email.com" value={authEmail} onChange={(e)=>setAuthEmail(e.target.value)} />
+                    </div>
+                    <div className="input-group">
+                        <label className="title-label">비밀번호</label>
+                        <input type="password" className="title-input" placeholder="6자리 이상 입력" value={authPassword} onChange={(e)=>setAuthPassword(e.target.value)} />
+                    </div>
 
-                <div style={{background: '#f9fafb', border: '1px solid var(--border)', padding: '16px', borderRadius: '4px', marginBottom: '24px'}}>
-                   <label className="checkbox-label" style={{color:'var(--text-main)', marginBottom:'12px', borderBottom:'1px solid var(--border)', paddingBottom:'12px'}}>
-                     <input type="checkbox" checked={termsAgreed && privacyAgreed} onChange={(e)=>{setTermsAgreed(e.target.checked); setPrivacyAgreed(e.target.checked)}} />
-                     전체 약관 동의
-                   </label>
-                   <div style={{display:'flex', flexDirection:'column', gap:'10px'}}>
-                     <label className="checkbox-label" style={{margin:0}}>
-                        <input type="checkbox" checked={termsAgreed} onChange={e=>setTermsAgreed(e.target.checked)} /> 
-                        (필수) <span style={{textDecoration:'underline', marginLeft:'4px'}} onClick={(e)=>{e.preventDefault(); setIsTermsModalOpen(true);}}>서비스 이용약관</span>
-                     </label>
-                     <label className="checkbox-label" style={{margin:0}}>
-                        <input type="checkbox" checked={privacyAgreed} onChange={e=>setPrivacyAgreed(e.target.checked)} /> 
-                        (필수) <span style={{textDecoration:'underline', marginLeft:'4px'}} onClick={(e)=>{e.preventDefault(); setIsTermsModalOpen(true);}}>개인정보 수집 및 이용</span>
-                     </label>
-                   </div>
+                    <div style={{background: 'var(--primary-light)', border: '1px solid var(--border)', padding: '16px', borderRadius: '4px', marginBottom: '24px'}}>
+                        <label className="checkbox-label" style={{margin:0, borderBottom:'1px solid var(--border)', paddingBottom:'12px', marginBottom:'12px'}}>
+                            <input type="checkbox" checked={termsAgreed && privacyAgreed} onChange={(e)=>{setTermsAgreed(e.target.checked); setPrivacyAgreed(e.target.checked)}} />
+                            <span style={{fontWeight:'800', color:'var(--text-main)'}}>전체 약관 동의 (필수)</span>
+                        </label>
+                        <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
+                            <label className="checkbox-label" style={{margin:0, padding:0, border:'none', background:'transparent'}}>
+                                <input type="checkbox" checked={termsAgreed} onChange={e=>setTermsAgreed(e.target.checked)} /> 
+                                <span>(필수) <span style={{textDecoration:'underline'}} onClick={(e)=>{e.preventDefault(); setIsTermsModalOpen(true);}}>서비스 이용약관</span> 동의</span>
+                            </label>
+                            <label className="checkbox-label" style={{margin:0, padding:0, border:'none', background:'transparent'}}>
+                                <input type="checkbox" checked={privacyAgreed} onChange={e=>setPrivacyAgreed(e.target.checked)} /> 
+                                <span>(필수) <span style={{textDecoration:'underline'}} onClick={(e)=>{e.preventDefault(); setIsTermsModalOpen(true);}}>개인정보 수집 및 이용</span> 동의</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <button className="submit-btn" disabled={!isSignupValid} onClick={processEmailSignup}>가입 완료 및 시작하기</button>
                 </div>
-                
-                <button className="submit-btn" disabled={!isSignupValid} onClick={processEmailSignup}>가입 완료 및 시작하기</button>
-              </div>
             ) : (
-              <div className="auth-form">
-                <div className="input-group">
-                  <label className="title-label">이메일</label>
-                  <input type="email" className="title-input" placeholder="이메일 입력" value={authEmail} onChange={(e)=>setAuthEmail(e.target.value)} />
+                <div className="auth-form">
+                    <div className="input-group">
+                        <label className="title-label">이메일 주소</label>
+                        <input type="email" className="title-input" placeholder="이메일 입력" value={authEmail} onChange={(e)=>setAuthEmail(e.target.value)} />
+                    </div>
+                    <div className="input-group">
+                        <label className="title-label">비밀번호</label>
+                        <input type="password" className="title-input" placeholder="비밀번호 입력" value={authPassword} onChange={(e)=>setAuthPassword(e.target.value)} />
+                    </div>
+                    <button className="submit-btn" disabled={!isLoginValid} onClick={processEmailLogin}>로그인</button>
                 </div>
-                <div className="input-group">
-                  <label className="title-label">비밀번호</label>
-                  <input type="password" className="title-input" placeholder="비밀번호 입력" value={authPassword} onChange={(e)=>setAuthPassword(e.target.value)} />
-                </div>
-                <button className="submit-btn" disabled={!isLoginValid} onClick={processEmailLogin}>이메일로 로그인</button>
-              </div>
             )}
 
-            <div className="divider" style={{ margin: '32px 0', display: 'flex', alignItems: 'center', color: 'var(--text-sub)', fontSize: '13px', fontWeight: 700 }}>
-              <div style={{ flex: 1, height: '1px', background: 'var(--border)' }}></div>
-              <span style={{ padding: '0 16px' }}>또는 간편 로그인</span>
-              <div style={{ flex: 1, height: '1px', background: 'var(--border)' }}></div>
+            <div style={{display:'flex', alignItems:'center', width:'100%', margin:'24px 0', color:'var(--text-sub)', fontSize:'12px', fontWeight:'700'}}>
+                <div style={{flex:1, height:'1px', background:'var(--border)'}}></div>
+                <span style={{padding:'0 16px'}}>또는 간편 로그인</span>
+                <div style={{flex:1, height:'1px', background:'var(--border)'}}></div>
             </div>
 
             <button className="social-btn kakao" onClick={processKakaoLogin}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3c-5.52 0-10 3.58-10 8 0 2.85 1.8 5.34 4.5 6.74-.2.7-.6 2.22-.65 2.45-.06.28.1.28.24.18.12-.08 2.74-1.85 3.86-2.61.65.08 1.34.14 2.05.14 5.52 0 10-3.58 10-8s-4.48-8-10-8z"/></svg>
-              카카오톡으로 시작
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 3c-5.52 0-10 3.58-10 8 0 2.85 1.8 5.34 4.5 6.74-.2.7-.6 2.22-.65 2.45-.06.28.1.28.24.18.12-.08 2.74-1.85 3.86-2.61.65.08 1.34.14 2.05.14 5.52 0 10-3.58 10-8s-4.48-8-10-8z"/>
+              </svg>
+              카카오톡으로 계속하기
             </button>
 
             <button className="social-btn" onClick={processGoogleLogin}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 12c0-.82-.07-1.61-.2-2.38H12v4.5h5.68a5.4 5.4 0 0 1-2.34 3.55v2.95h3.79C21.34 18.57 22 15.55 22 12z"/></svg>
-              Google 계정으로 시작
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M22 12c0-.82-.07-1.61-.2-2.38H12v4.5h5.68a5.4 5.4 0 0 1-2.34 3.55v2.95h3.79C21.34 18.57 22 15.55 22 12z"/>
+              </svg>
+              Google 계정으로 계속하기
             </button>
+            <p style={{fontSize:'12px', color:'var(--text-sub)', marginTop:'16px', fontWeight:'600'}}>SNS 계정 연동 시 회원가입이 자동으로 진행됩니다.</p>
           </div>
         </div>
       )}
 
+      {/* 뷰: 서비스 소개 */}
       {currentView === 'about' && (
         <div className="view-section" style={{background:'#ffffff', textAlign:'center'}}>
             <div style={{padding: '40px 20px'}}>
-                <div style={{width:'80px', height:'80px', background:'var(--text-main)', borderRadius:'4px', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:'40px', fontWeight:'900', margin:'0 auto 20px auto'}}>B</div>
+                <div style={{width:'80px', height:'80px', background:'var(--text-main)', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:'40px', fontWeight:'900', margin:'0 auto 20px auto'}}>B</div>
                 <h1 style={{fontSize:'24px', fontWeight:'900', color:'var(--text-main)', marginBottom:'12px'}}>비포터 (Beforeter)</h1>
-                <p style={{fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.6', marginBottom:'40px'}}>단 2장의 사진으로 전문성을 증명하세요.<br/>신뢰를 얻는 가장 완벽한 작업 리포트 플랫폼</p>
+                <p style={{fontSize:'15px', color:'var(--text-sub)', lineHeight:'1.6', marginBottom:'40px', fontWeight:'600'}}>단 2장의 사진으로 당신의 전문성을 증명하세요.<br/>고객의 신뢰를 얻는 가장 완벽한 작업 리포트 플랫폼</p>
 
                 <div style={{textAlign:'left', display:'flex', flexDirection:'column', gap:'16px'}}>
-                    <div style={{padding:'20px', borderRadius:'4px', border:'1px solid var(--border)'}}>
-                        <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--text-main)'}}>⚡ 10초 완성 리포트</h3>
-                        <p style={{margin:0, fontSize:'13px', color:'var(--text-sub)', lineHeight:'1.5'}}>작업 전/후 사진만 올리면 전문적인 리포트가 완성됩니다.</p>
+                    <div style={{background:'var(--primary-light)', padding:'20px', borderRadius:'4px', border:'1px solid var(--border)'}}>
+                        <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--text-main)', display:'flex', alignItems:'center', gap:'8px', fontWeight:'900'}}>⚡ 10초 완성 리포트</h3>
+                        <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.5', fontWeight:'600'}}>작업 전/후 사진만 올리면 깔끔하고 전문적인 리포트가 자동으로 생성됩니다.</p>
                     </div>
-                    <div style={{padding:'20px', borderRadius:'4px', border:'1px solid var(--border)'}}>
-                        <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--text-main)'}}>🔗 간편한 URL 공유</h3>
-                        <p style={{margin:0, fontSize:'13px', color:'var(--text-sub)', lineHeight:'1.5'}}>카카오톡으로 링크 하나만 보내면 고객이 바로 확인합니다.</p>
+                    <div style={{background:'var(--primary-light)', padding:'20px', borderRadius:'4px', border:'1px solid var(--border)'}}>
+                        <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--text-main)', display:'flex', alignItems:'center', gap:'8px', fontWeight:'900'}}>🔗 간편한 URL 공유</h3>
+                        <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.5', fontWeight:'600'}}>작업 완료 후 카카오톡으로 링크 하나만 보내면, 고객이 바로 결과를 확인할 수 있습니다.</p>
                     </div>
-                    <div style={{padding:'20px', borderRadius:'4px', border:'1px solid var(--border)'}}>
-                        <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--text-main)'}}>👤 나만의 오픈 프로필</h3>
-                        <p style={{margin:0, fontSize:'13px', color:'var(--text-sub)', lineHeight:'1.5'}}>리포트가 쌓여 자연스럽게 실력을 증명하는 포트폴리오가 됩니다.</p>
+                    <div style={{background:'var(--primary-light)', padding:'20px', borderRadius:'4px', border:'1px solid var(--border)'}}>
+                        <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--text-main)', display:'flex', alignItems:'center', gap:'8px', fontWeight:'900'}}>👤 나만의 오픈 프로필</h3>
+                        <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.5', fontWeight:'600'}}>그동안 올린 리포트가 내 프로필에 쌓여, 자연스럽게 나의 실력을 증명하는 포트폴리오가 됩니다.</p>
                     </div>
                 </div>
 
@@ -1684,38 +2344,40 @@ export default function App() {
         </div>
       )}
 
+      {/* 뷰: 마이페이지 */}
       {currentView === 'mypage' && currentUser && (
         <div className="view-section">
-          <div className="mypage-header" style={{background: '#ffffff', padding: '30px 20px', textAlign: 'center', borderBottom: '1px solid var(--border)', position: 'relative'}}>
+          <div className="mypage-header" style={{background: 'var(--card-bg)', padding: '30px 20px', textAlign: 'center', borderBottom: '1px solid var(--border)', position: 'relative'}}>
             <button style={{position: 'absolute', top: '16px', right: '16px', background: 'white', border: '1px solid var(--border)', padding: '6px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', color: 'var(--text-main)'}} onClick={openProfileEdit}>
               프로필 수정
             </button>
             
-            <div className="author-avatar" style={{margin: '0 auto 12px auto', width: '72px', height: '72px', fontSize: '28px', border:'1px solid var(--border)'}} onClick={() => setSelectedImage(currentUser.profilePic)}>
+            <div className="author-avatar" style={{margin: '0 auto 12px auto', width: '72px', height: '72px', fontSize: '28px'}} onClick={() => setSelectedImage(currentUser.profilePic)}>
               {currentUser.profilePic ? <img src={currentUser.profilePic} alt="프로필" /> : (currentUser.name || '작업자').charAt(0)}
             </div>
             
-            <h2 style={{ margin: 0, fontSize: '20px', color: 'var(--text-main)', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', fontWeight: 800 }}>
+            <h2 style={{ margin: 0, fontSize: '20px', color: 'var(--text-main)', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', fontWeight: '900' }}>
                 {currentUser.name}
                 {currentUser.bizStatus === 'approved' && <span className="biz-badge">사업자 인증됨</span>}
+                {currentUser.bizStatus === 'pending' && <span className="biz-badge pending">사업자 검수중</span>}
             </h2>
-            {currentUser.company && <p style={{margin:'4px 0 0 0', fontSize:'14px', color:'var(--text-sub)'}}>{currentUser.company}</p>}
+            {currentUser.company && <p style={{margin:'4px 0 0 0', fontSize:'14px', color:'var(--text-sub)', fontWeight:'600'}}>{currentUser.company}</p>}
             
             <div style={{marginTop:'12px'}}>
-                <p style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 8px 0', fontWeight:'600'}}>{currentUser.intro || '자기소개를 입력해주세요.'}</p>
+                <p style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 8px 0', fontWeight:'700'}}>{currentUser.intro || '자기소개를 입력해주세요.'}</p>
                 <div style={{display:'flex', gap:'6px', justifyContent:'center', flexWrap:'wrap'}}>
-                    {(currentUser.keywords || []).map(k => <span key={k} style={{background:'var(--primary-light)', color:'var(--text-main)', border:'1px solid var(--border)', padding:'4px 10px', borderRadius:'4px', fontSize:'12px', fontWeight:'700'}}>#{k}</span>)}
+                    {(currentUser.keywords || []).map(k => <span key={k} style={{background:'var(--primary-light)', color:'var(--text-main)', border:'1px solid var(--border)', padding:'4px 10px', borderRadius:'4px', fontSize:'12px', fontWeight:'800'}}>#{k}</span>)}
                 </div>
             </div>
 
-            <button className="sheet-btn" style={{marginTop:'20px', padding:'12px', background:'white', color:'var(--text-main)', fontSize:'14px'}} onClick={() => showPublicProfile(currentUser.id, true)}>
+            <button className="sheet-btn" style={{marginTop:'20px', padding:'12px', border:'1px solid var(--text-main)', color:'var(--text-main)', background:'white', fontSize:'14px'}} onClick={() => showPublicProfile(currentUser.id, true)}>
               내 오픈 프로필 미리보기
             </button>
 
             <div style={{display: 'flex', justifyContent: 'center', gap: '40px', marginTop: '20px'}}>
               <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center'}}>
                 <span style={{fontSize: '20px', fontWeight: '800', color: 'var(--text-main)'}}>{myFeeds.length}</span>
-                <span style={{fontSize: '13px', color: 'var(--text-sub)', fontWeight: 700}}>작성한 리포트</span>
+                <span style={{fontSize: '13px', color: 'var(--text-sub)', fontWeight: '700'}}>작성한 리포트</span>
               </div>
             </div>
           </div>
@@ -1755,46 +2417,47 @@ export default function App() {
         </div>
       )}
 
+      {/* 뷰: 공개 프로필 */}
       {currentView === 'public-profile' && publicProfileUser && (
         <div className="view-section">
-          <div style={{background: '#ffffff', padding: '20px 20px 30px 20px', textAlign: 'center', borderBottom: '1px solid var(--border)', position: 'relative'}}>
+          <div style={{background: 'var(--card-bg)', padding: '20px 20px 30px 20px', textAlign: 'center', borderBottom: '1px solid var(--border)', position: 'relative'}}>
             <button style={{position: 'absolute', top: '16px', left: '16px', background: 'white', border: '1px solid var(--border)', width:'36px', height:'36px', borderRadius: '4px', display:'flex', alignItems:'center', justifyContent:'center', cursor: 'pointer', color: 'var(--text-main)'}} onClick={() => switchView('feed')}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
             </button>
             
-            <div className="author-avatar" style={{margin: '10px auto 12px auto', width: '72px', height: '72px', fontSize: '28px', border:'1px solid var(--border)'}} onClick={() => setSelectedImage(publicProfileUser.profilePic)}>
+            <div className="author-avatar" style={{margin: '10px auto 12px auto', width: '72px', height: '72px', fontSize: '28px'}} onClick={() => setSelectedImage(publicProfileUser.profilePic)}>
               {publicProfileUser.profilePic ? <img src={publicProfileUser.profilePic} alt="프로필" /> : (publicProfileUser.name || '작업자').charAt(0)}
             </div>
             
-            <h2 style={{ margin: 0, fontSize: '20px', color: 'var(--text-main)', fontWeight: 800 }}>
+            <h2 style={{ margin: 0, fontSize: '20px', color: 'var(--text-main)', fontWeight:'900' }}>
                 {publicProfileUser.name}
                 {publicProfileUser.bizStatus === 'approved' && <span className="biz-badge">사업자 인증됨</span>}
             </h2>
-            {publicProfileUser.company && <p style={{fontSize:'13px', color:'var(--text-sub)', marginTop:'4px'}}>{publicProfileUser.company}</p>}
+            {publicProfileUser.company && <p style={{fontSize:'13px', color:'var(--text-sub)', marginTop:'4px', fontWeight:'600'}}>{publicProfileUser.company}</p>}
             
             <div style={{marginTop:'16px'}}>
-                <p style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 12px 0', fontWeight:'600'}}>{publicProfileUser.intro || '작성된 소개가 없습니다.'}</p>
+                <p style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 12px 0', fontWeight:'700'}}>{publicProfileUser.intro || '작성된 소개가 없습니다.'}</p>
                 <div style={{display:'flex', gap:'6px', justifyContent:'center', flexWrap:'wrap'}}>
-                    {(publicProfileUser.keywords || []).map(k => <span key={k} style={{background:'var(--primary-light)', color:'var(--text-main)', border:'1px solid var(--border)', padding:'4px 10px', borderRadius:'4px', fontSize:'12px', fontWeight:'700'}}>#{k}</span>)}
+                    {(publicProfileUser.keywords || []).map(k => <span key={k} style={{background:'var(--primary-light)', border:'1px solid var(--border)', color:'var(--text-main)', padding:'4px 10px', borderRadius:'4px', fontSize:'12px', fontWeight:'800'}}>#{k}</span>)}
                 </div>
             </div>
 
             <div style={{display: 'flex', justifyContent: 'center', gap: '40px', marginTop: '20px'}}>
               <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center'}}>
-                <span style={{fontSize: '20px', fontWeight: '800', color: 'var(--text-main)'}}>{publicProfileFeeds.length}</span>
-                <span style={{fontSize: '13px', color: 'var(--text-sub)', fontWeight: 700}}>공개된 리포트</span>
+                <span style={{fontSize: '20px', fontWeight: '900', color: 'var(--text-main)'}}>{publicProfileFeeds.length}</span>
+                <span style={{fontSize: '13px', color: 'var(--text-sub)', fontWeight:'700'}}>공개된 리포트</span>
               </div>
             </div>
             
-            <button onClick={() => copyProfileLink(publicProfileUser.id)} style={{background:'white', color:'var(--text-main)', border:'1px solid var(--text-main)', padding:'10px 20px', borderRadius:'4px', fontSize:'14px', fontWeight:'700', marginTop:'24px', cursor:'pointer', display:'inline-flex', alignItems:'center', gap:'6px'}}>
+            <button onClick={() => copyProfileLink(publicProfileUser.id)} style={{background:'white', color:'var(--text-main)', border:'1px solid var(--text-main)', padding:'8px 20px', borderRadius:'4px', fontSize:'13px', fontWeight:'800', marginTop:'24px', cursor:'pointer', display:'inline-flex', alignItems:'center', gap:'6px'}}>
                 🔗 오픈 프로필 링크 복사
             </button>
           </div>
           
           <div className="feed-container">
             {publicProfileFeeds.length === 0 ? (
-              <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)', fontWeight: 700}}>
-                아직 공개된 리포트가 없습니다.
+              <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)'}}>
+                <p style={{ margin: 0, fontWeight: 700 }}>아직 공개된 리포트가 없습니다.</p>
               </div>
             ) : (
               publicProfileFeeds.map((item, idx) => {
@@ -1820,6 +2483,7 @@ export default function App() {
         </div>
       )}
 
+      {/* 뷰: 리포트 작성 */}
       {currentView === 'upload' && (
         <div className="view-section">
           <div className="upload-container" style={{padding:'24px 20px'}}>
@@ -1871,7 +2535,7 @@ export default function App() {
                     </div>
                 </div>
                 
-                <textarea className="title-input" style={{fontSize:'14px', height:'80px', resize:'none', marginTop:0}} placeholder="상세 설명 (어떤 과정을 거쳤나요?)" value={sp.desc} onChange={(e) => handleSpaceDescChange(index, 'desc', e.target.value)}></textarea>
+                <textarea className="title-input" style={{fontSize:'14px', height:'80px', resize:'none', marginTop:0}} placeholder="작업 전후 통합 상세 설명 (어떤 과정을 거쳤나요?)" value={sp.desc} onChange={(e) => handleSpaceDescChange(index, 'desc', e.target.value)}></textarea>
               </div>
             ))}
             
@@ -1893,6 +2557,7 @@ export default function App() {
         </div>
       )}
 
+      {/* 뷰: 리포트 상세 보기 */}
       {currentView === 'detail' && detailReport && (
         <div className="view-section" style={{paddingTop: '20px'}}>
           <div className="feed-container">
@@ -1915,10 +2580,10 @@ export default function App() {
                   </div>
                   <div>
                     <span style={{fontSize:'15px', fontWeight:'800', color:'var(--text-main)'}}>{detailReport.authorName || '작업자'}</span>
-                    <p style={{fontSize:'12px', color:'var(--text-sub)', margin:0, fontWeight:600}}>{formatDisplayTime(detailReport)}</p>
+                    <p style={{fontSize:'12px', color:'var(--text-sub)', margin:0, fontWeight:'600'}}>{formatDisplayTime(detailReport)}</p>
                   </div>
                 </div>
-                <button onClick={() => showPublicProfile(detailReport.authorId)} style={{background:'white', border:'1px solid var(--border)', color:'var(--text-main)', padding:'6px 12px', borderRadius:'4px', fontSize:'12px', fontWeight:'700', cursor:'pointer'}}>프로필 보기</button>
+                <button onClick={() => showPublicProfile(detailReport.authorId)} style={{background:'var(--primary-light)', color:'var(--text-main)', border:'1px solid var(--border)', padding:'6px 12px', borderRadius:'4px', fontSize:'12px', fontWeight:'800', cursor:'pointer'}}>프로필 보기</button>
               </div>
               
               <h2 style={{fontSize:'22px', fontWeight:'900', color:'var(--text-main)', margin: '16px 0 16px 0'}}>{detailReport.title}</h2>
@@ -1938,7 +2603,7 @@ export default function App() {
               {(detailReport.spaces && detailReport.spaces.length > 0 ? detailReport.spaces : [{ beforeImg: detailReport.beforeImg, afterImg: detailReport.afterImg, desc: detailReport.desc }]).map((sp, idx) => (
                 <div key={idx} style={{marginBottom: '24px', background: '#fff', padding: '16px', borderRadius: '4px', border: '1px solid var(--border)'}}>
                   {sp.spaceName && (
-                    <h4 style={{margin:'0 0 16px 0', color:'var(--text-main)', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight:800}}>
+                    <h4 style={{margin:'0 0 16px 0', color:'var(--text-main)', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight:'900'}}>
                       <span style={{background:'var(--text-main)', padding:'4px 8px', borderRadius:'4px', color:'white', fontSize:'11px'}}>📍</span> {sp.spaceName}
                     </h4>
                   )}
@@ -1950,7 +2615,7 @@ export default function App() {
                         <img src={sp.beforeImg} style={{display:'block', width:'100%'}} alt="Before" />
                       </div>
                       <div className="feed-img-wrap" style={{height:'auto', minHeight:'200px', cursor:'zoom-in'}} onClick={() => setSelectedImage(sp.afterImg)}>
-                        <span className="badge" style={{background:'var(--text-main)', border:'1px solid white'}}>After</span>
+                        <span className="badge" style={{background:'white', color:'var(--text-main)'}}>After</span>
                         <img src={sp.afterImg} style={{display:'block', width:'100%'}} alt="After" />
                       </div>
                     </div>
@@ -1963,7 +2628,7 @@ export default function App() {
                         <img src={sp.beforeImg} style={{height:'100%', objectFit:'cover'}} alt="Before" />
                       </div>
                       <div className="feed-img-wrap" style={{height:'180px', cursor:'zoom-in'}} onClick={() => setSelectedImage(sp.afterImg)}>
-                        <span className="badge" style={{background:'var(--text-main)', border:'1px solid white'}}>After</span>
+                        <span className="badge" style={{background:'white', color:'var(--text-main)'}}>After</span>
                         <img src={sp.afterImg} style={{height:'100%', objectFit:'cover'}} alt="After" />
                       </div>
                     </div>
@@ -1971,15 +2636,15 @@ export default function App() {
 
                   {detailViewMode === 'flip' && (
                     <div>
-                      <p style={{margin:'0 0 10px 0', fontSize:'12px', color:'var(--text-sub)', textAlign:'center', fontWeight:'700'}}>사진을 탭하여 전/후 비교</p>
+                      <p style={{margin:'0 0 10px 0', fontSize:'12px', color:'var(--text-sub)', textAlign:'center', fontWeight:'700'}}>사진을 탭하여 전/후를 비교해보세요 👆</p>
                       <div className={`flip-card ${flippedCards[idx] ? 'flipped' : ''}`} onClick={() => toggleFlip(idx)}>
                         <div className="flip-card-inner">
                           <div className="flip-card-front">
-                            <span className="img-label" style={{background:'var(--text-main)', position:'absolute', top:'10px', left:'10px', zIndex:10, padding:'4px 8px', borderRadius:'4px', color:'white', fontSize:'11px', fontWeight:800}}>Before</span>
+                            <span className="img-label" style={{background:'var(--text-main)', position:'absolute', top:'10px', left:'10px', zIndex:10, padding:'4px 8px', borderRadius:'4px', color:'white', fontSize:'11px', fontWeight:'800'}}>Before</span>
                             <img src={sp.beforeImg} style={{width:'100%', height:'100%', objectFit:'cover'}} alt="Before" />
                           </div>
                           <div className="flip-card-back">
-                            <span className="img-label" style={{background:'var(--text-main)', position:'absolute', top:'10px', left:'10px', zIndex:10, padding:'4px 8px', borderRadius:'4px', color:'white', fontSize:'11px', fontWeight:800, border:'1px solid white'}}>After</span>
+                            <span className="img-label" style={{background:'white', border:'1px solid var(--text-main)', position:'absolute', top:'10px', left:'10px', zIndex:10, padding:'4px 8px', borderRadius:'4px', color:'var(--text-main)', fontSize:'11px', fontWeight:'800'}}>After</span>
                             <img src={sp.afterImg} style={{width:'100%', height:'100%', objectFit:'cover'}} alt="After" />
                           </div>
                         </div>
@@ -1991,7 +2656,7 @@ export default function App() {
               ))}
             </div>
             
-            <button className="submit-btn" style={{background:'var(--kakao)', color:'var(--kakao-text)', marginTop:0, border:'none'}} onClick={() => setIsAlimtalkModalOpen(true)}>
+            <button className="submit-btn" style={{background:'var(--kakao)', color:'var(--kakao-text)', border:'none', marginTop:0}} onClick={() => setIsAlimtalkModalOpen(true)}>
                 카카오 알림톡 전송
             </button>
             <button className="submit-btn" style={{marginTop:'12px'}} onClick={() => copyLink(detailReport.id)}>
@@ -2003,9 +2668,9 @@ export default function App() {
             
             <div className="comment-section" style={{marginTop: '32px'}}>
               <div style={{display:'flex', alignItems:'center', gap:'16px', marginBottom:'20px'}}>
-                  <h3 style={{fontSize:'16px', margin:0, fontWeight:800}}>댓글 {(detailReport.comments || []).length}</h3>
-                  <button onClick={(e) => handleToggleLike(detailReport, e)} style={{background:'none', border:'1px solid var(--border)', borderRadius:'4px', padding:'4px 12px', display:'flex', alignItems:'center', gap:'6px', cursor:'pointer', fontSize:'14px', fontWeight:'700', color: detailReport.likes?.includes(currentUser?.id) ? 'var(--text-main)' : 'var(--text-sub)'}}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill={detailReport.likes?.includes(currentUser?.id) ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+                  <h3 style={{fontSize:'16px', margin:0, fontWeight:'900'}}>댓글 {(detailReport.comments || []).length}</h3>
+                  <button onClick={(e) => handleToggleLike(detailReport, e)} style={{background:'none', border:'1px solid var(--border)', borderRadius:'4px', padding:'4px 12px', display:'flex', alignItems:'center', gap:'6px', cursor:'pointer', fontSize:'14px', fontWeight:'800', color: detailReport.likes?.includes(currentUser?.id) ? 'var(--text-main)' : 'var(--text-sub)'}}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill={detailReport.likes?.includes(currentUser?.id) ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg> 
                       {(detailReport.likes || []).length}
                   </button>
               </div>
@@ -2018,15 +2683,15 @@ export default function App() {
                     </div>
                     <div>
                       <div style={{fontSize:'13px', fontWeight:'800', marginBottom:'4px'}}>{c.authorName}</div>
-                      <div style={{fontSize:'14px', color:'var(--text-main)', lineHeight:'1.4'}}>{c.text}</div>
+                      <div style={{fontSize:'14px', color:'var(--text-main)', lineHeight:'1.4', fontWeight:'500'}}>{c.text}</div>
                     </div>
                   </div>
                 ))}
               </div>
               
               <div style={{display:'flex', gap:'10px', marginTop:'20px'}}>
-                <input type="text" className="title-input" style={{flex:1, marginTop:0}} placeholder="댓글을 남겨보세요" value={commentInput} onChange={(e) => setCommentInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && submitComment()}/>
-                <button className="submit-btn" style={{width:'auto', marginTop:0, padding:'0 20px'}} onClick={submitComment}>등록</button>
+                <input type="text" style={{flex:1, padding:'12px', border:'1px solid var(--border)', borderRadius:'4px', fontSize:'14px', outline:'none', background:'var(--primary-light)', color:'var(--text-main)'}} placeholder="댓글을 남겨보세요" value={commentInput} onChange={(e) => setCommentInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && submitComment()}/>
+                <button style={{background:'var(--text-main)', color:'white', border:'none', padding:'0 16px', borderRadius:'4px', fontWeight:'800', cursor:'pointer'}} onClick={submitComment}>등록</button>
               </div>
             </div>
           </div>
@@ -2034,86 +2699,102 @@ export default function App() {
         </div>
       )}
 
-      {/* 모달 및 바텀 시트 */}
+      {/* 모달: 카카오 알림톡 전송 */}
       <div className={`modal-overlay ${isAlimtalkModalOpen ? 'active' : ''}`}>
-        <div className="modal-content">
-          <h3 style={{ marginTop: 0, marginBottom: '12px', fontSize: '18px' }}>고객에게 알림톡 전송</h3>
-          <p style={{fontSize:'13px', color:'var(--text-sub)', marginBottom:'20px', lineHeight:'1.5'}}>
-            작업 결과를 고객의 카카오톡으로 전송합니다.
+        <div className="modal-content" style={{ padding: '24px 20px', width: '90%' }}>
+          <h3 style={{ marginTop: 0, marginBottom: '12px', fontSize: '18px', fontWeight:'900' }}>고객에게 알림톡 전송</h3>
+          <p style={{fontSize:'13px', color:'var(--text-sub)', marginBottom:'20px', lineHeight:'1.5', fontWeight:'600'}}>
+            작업 결과를 고객의 카카오톡으로 바로 전송합니다.<br/>고객의 휴대전화 번호를 입력해주세요.
           </p>
-          <div className="input-group" style={{ marginBottom: '24px' }}>
-            <label className="title-label">받는 사람 연락처</label>
-            <input type="tel" className="title-input" placeholder="숫자만 입력" value={alimtalkPhone} onChange={(e) => setAlimtalkPhone(e.target.value.replace(/[^0-9]/g, ''))} />
+          <div className="input-group" style={{ marginBottom: '24px', textAlign:'left' }}>
+            <label className="title-label" style={{ fontSize: '13px' }}>받는 사람 연락처</label>
+            <input type="tel" className="title-input" style={{ padding: '12px' }} placeholder="숫자만 입력 (예: 01012345678)" value={alimtalkPhone} onChange={(e) => setAlimtalkPhone(e.target.value.replace(/[^0-9]/g, ''))} />
           </div>
-          <button className="sheet-btn" disabled={isAlimtalkSending} style={{ background: 'var(--kakao)', color: 'var(--kakao-text)', border: 'none' }} onClick={sendAlimtalk}>
+          <button className="sheet-btn" disabled={isAlimtalkSending} style={{ background: 'var(--kakao)', color: 'var(--kakao-text)', border: 'none', fontWeight:'900' }} onClick={sendAlimtalk}>
             {isAlimtalkSending ? '전송 처리 중...' : '전송하기'}
           </button>
           <button className="sheet-btn cancel" onClick={() => setIsAlimtalkModalOpen(false)}>닫기</button>
         </div>
       </div>
 
+      {/* 모달: 이용약관 및 개인정보처리방침 */}
       <div className={`modal-overlay ${isTermsModalOpen ? 'active' : ''}`}>
-        <div className="modal-content" style={{ width: '95%', maxHeight:'85vh' }}>
-          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>이용약관 및 정책</h3>
-          <div style={{textAlign:'left', height:'50vh', overflowY:'auto', background:'#f9fafb', padding:'16px', borderRadius:'4px', border:'1px solid var(--border)', fontSize:'12px', lineHeight:'1.6', color:'var(--text-sub)'}}>
+        <div className="modal-content" style={{ padding: '24px 20px', width: '95%', maxHeight:'85vh' }}>
+          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px', fontWeight:'900' }}>이용약관 및 정책</h3>
+          
+          <div style={{textAlign:'left', height:'50vh', overflowY:'auto', background:'var(--primary-light)', padding:'16px', borderRadius:'4px', border:'1px solid var(--border)', fontSize:'12px', lineHeight:'1.6', color:'var(--text-sub)'}}>
             <h4 style={{color:'var(--text-main)', marginTop:0}}>서비스 이용약관</h4>
             <pre style={{whiteSpace:'pre-wrap', fontFamily:'inherit', margin:0}}>{TERMS_OF_SERVICE}</pre>
             <hr style={{margin:'20px 0', borderTop:'1px solid var(--border)', borderBottom:'none'}}/>
             <h4 style={{color:'var(--text-main)', marginTop:0}}>개인정보처리방침</h4>
             <pre style={{whiteSpace:'pre-wrap', fontFamily:'inherit', margin:0}}>{PRIVACY_POLICY}</pre>
           </div>
+
           <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none', marginTop:'20px' }} onClick={() => setIsTermsModalOpen(false)}>확인</button>
         </div>
       </div>
 
+      {/* 리포트 관리(수정/삭제) 모달 */}
       <div className={`modal-overlay ${isEditModalOpen ? 'active' : ''}`}>
-        <div className="modal-content">
-          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>리포트 관리</h3>
-          <div className="input-group">
-            <label className="title-label">제목 수정</label>
-            <input type="text" className="title-input" value={editDocTitle} onChange={(e) => setEditDocTitle(e.target.value)} />
+        <div className="modal-content" style={{ padding: '24px 20px', width: '90%' }}>
+          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px', fontWeight:'900' }}>리포트 관리</h3>
+          <div className="input-group" style={{ marginBottom: '16px', textAlign:'left' }}>
+            <label className="title-label" style={{ fontSize: '13px' }}>제목 수정</label>
+            <input type="text" className="title-input" style={{ padding: '12px' }} value={editDocTitle} onChange={(e) => setEditDocTitle(e.target.value)} />
           </div>
-          <div className="input-group" style={{ marginBottom: '24px' }}>
-            <label className="title-label">공개 상태</label>
-            <select className="title-input" value={editDocStatus} onChange={(e) => setEditDocStatus(e.target.value)}>
-              <option value="public">공개 (모두 볼 수 있음)</option>
+          <div className="input-group" style={{ marginBottom: '24px', textAlign:'left' }}>
+            <label className="title-label" style={{ fontSize: '13px' }}>공개 상태</label>
+            <select className="title-input" style={{ padding: '12px' }} value={editDocStatus} onChange={(e) => setEditDocStatus(e.target.value)}>
+              <option value="public">공개 (모두가 볼 수 있음)</option>
               <option value="private">비공개 (링크가 있는 사람만)</option>
             </select>
           </div>
           <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none' }} onClick={submitReportEdit}>변경사항 저장</button>
-          <button className="sheet-btn" style={{ background: 'white', color: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={deleteReport}>이 리포트 삭제하기</button>
+          <button className="sheet-btn" style={{ background: 'white', color: 'var(--danger)', border: '1px solid var(--danger)' }} onClick={deleteReport}>이 리포트 삭제하기</button>
           <button className="sheet-btn cancel" onClick={() => setIsEditModalOpen(false)}>닫기</button>
         </div>
       </div>
       
+      {/* 프로필 수정 모달 */}
       <div className={`modal-overlay ${isProfileModalOpen ? 'active' : ''}`}>
-        <div className="modal-content" style={{ width: '100%', maxHeight:'85vh' }}>
-          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>프로필 편집</h3>
+        <div className="modal-content" style={{ padding: '24px 20px', width: '100%', maxHeight:'85vh', overflowY:'auto' }}>
+          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px', fontWeight:'900' }}>프로필 편집</h3>
           
-          <div className="author-avatar" style={{width:'80px', height:'80px', borderRadius:'4px', background:'#f3f4f6', margin:'0 auto 20px auto', position:'relative', fontSize:'24px', border:'1px solid var(--border)'}} onClick={() => profilePicRef.current.click()}>
+          <div className="author-avatar" style={{width:'80px', height:'80px', borderRadius:'4px', background:'var(--primary-light)', margin:'0 auto 20px auto', position:'relative', fontSize:'24px', border:'1px solid var(--border)'}} onClick={() => profilePicRef.current.click()}>
             {editProfilePic ? <img src={editProfilePic} style={{width:'100%', height:'100%', objectFit:'cover'}} alt="프로필" /> : (editName || '작업자').charAt(0)}
-            <div style={{position: 'absolute', bottom: 0, left: 0, width: '100%', height: '30%', background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '12px'}}>사진 변경</div>
+            <div style={{position: 'absolute', bottom: 0, left: 0, width: '100%', height: '30%', background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '11px', fontWeight:'800'}}>사진 변경</div>
           </div>
           
-          <div className="input-group">
-            <label className="title-label">이름</label>
-            <input type="text" className="title-input" value={editName} onChange={(e) => setEditName(e.target.value)} />
+          <div className="input-group" style={{ marginBottom: '16px' }}>
+            <label className="title-label" style={{ fontSize: '13px' }}>이름</label>
+            <input type="text" className="title-input" style={{ padding: '12px' }} value={editName} onChange={(e) => setEditName(e.target.value)} />
           </div>
-          <div className="input-group">
-            <label className="title-label">상호명</label>
-            <input type="text" className="title-input" value={editCompany} onChange={(e) => setEditCompany(e.target.value)} />
+          <div className="input-group" style={{ marginBottom: '16px' }}>
+            <label className="title-label" style={{ fontSize: '13px' }}>상호</label>
+            <input type="text" className="title-input" style={{ padding: '12px' }} placeholder="예: 김반장 클린" value={editCompany} onChange={(e) => setEditCompany(e.target.value)} />
           </div>
-          <div className="input-group">
-            <label className="title-label">사업자 등록번호 {(currentUser && currentUser.bizStatus === 'pending') && <span style={{color:'var(--text-sub)'}}>(검수중)</span>}</label>
-            <input type="text" className="title-input" value={editBizNum} maxLength={12} onChange={handleBizNumChange} />
+          <div className="input-group" style={{ marginBottom: '16px' }}>
+            <label className="title-label" style={{ fontSize: '13px' }}>
+                사업자 등록번호 
+                {(currentUser && currentUser.bizStatus === 'pending') && <span style={{color:'var(--text-sub)', fontSize:'11px', marginLeft:'6px'}}>(검수중)</span>}
+            </label>
+            <input 
+                type="text" 
+                className="title-input" 
+                style={{ padding: '12px' }} 
+                placeholder="숫자만 입력 시 하이픈 자동 생성" 
+                value={editBizNum} 
+                maxLength={12}
+                onChange={handleBizNumChange} 
+            />
           </div>
-          <div className="input-group">
-            <label className="title-label">간단 자기소개</label>
-            <input type="text" className="title-input" value={editIntro} onChange={(e) => setEditIntro(e.target.value)} />
+          <div className="input-group" style={{ marginBottom: '16px' }}>
+            <label className="title-label" style={{ fontSize: '13px' }}>간단 자기소개</label>
+            <input type="text" className="title-input" style={{ padding: '12px' }} placeholder="고객에게 어필할 한 줄 소개" value={editIntro} onChange={(e) => setEditIntro(e.target.value)} />
           </div>
           <div className="input-group" style={{ marginBottom: '24px' }}>
-            <label className="title-label">전문 분야 (쉼표 구분)</label>
-            <input type="text" className="title-input" value={editKeywords} onChange={(e) => setEditKeywords(e.target.value)} />
+            <label className="title-label" style={{ fontSize: '13px' }}>전문 분야 키워드 (쉼표 구분)</label>
+            <input type="text" className="title-input" style={{ padding: '12px' }} placeholder="예: 입주청소, 에어컨, 꼼꼼함" value={editKeywords} onChange={(e) => setEditKeywords(e.target.value)} />
           </div>
           
           <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none' }} onClick={saveProfile}>저장하기</button>
@@ -2121,39 +2802,40 @@ export default function App() {
         </div>
       </div>
 
+      {/* 알림 모달 */}
       <div className={`modal-overlay ${isNotiModalOpen ? 'active' : ''}`}>
-        <div className="modal-content" style={{maxHeight:'80vh'}}>
-          <h3 style={{ marginTop: 0, marginBottom: '20px' }}>알림센터</h3>
+        <div className="modal-content" style={{maxHeight:'80vh', overflowY:'auto'}}>
+          <h3 style={{ marginTop: 0, marginBottom: '20px', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', fontWeight:'900' }}>알림센터</h3>
           
           {appUpdateNoti && (
-             <div style={{padding:'16px', borderBottom:'1px solid var(--border)', background: appUpdateNoti.isRead ? 'transparent' : '#f9fafb', borderRadius:'4px', marginBottom:'12px', textAlign:'left', border: '1px solid var(--border)'}}>
+             <div style={{padding:'16px', borderBottom:'1px solid var(--border)', background: appUpdateNoti.isRead ? 'transparent' : 'var(--primary-light)', borderRadius:'4px', marginBottom:'12px', textAlign:'left', border:'1px solid var(--border)'}}>
                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
                     <div>
-                        <p style={{margin:0, fontSize:'14px', color: 'var(--text-main)', fontWeight:'800', marginBottom:'6px'}}>
+                        <p style={{margin:0, fontSize:'14px', color: appUpdateNoti.isRead ? 'var(--text-sub)' : 'var(--text-main)', fontWeight:'900', marginBottom:'6px'}}>
                             {appUpdateNoti.fromName}
                         </p>
-                        <p style={{margin:0, fontSize:'13px', color:'var(--text-sub)', lineHeight:'1.5'}}>
+                        <p style={{margin:0, fontSize:'13px', color:'var(--text-main)', lineHeight:'1.5', fontWeight:'600'}}>
                             {appUpdateNoti.text}
                         </p>
                     </div>
-                    {appUpdateNoti.isRead && <span style={{fontSize:'11px', color:'var(--text-sub)'}}>읽음</span>}
+                    {appUpdateNoti.isRead && <span style={{fontSize:'11px', color:'var(--text-sub)', whiteSpace:'nowrap', marginLeft:'8px'}}>읽음</span>}
                 </div>
              </div>
           )}
 
           {notifications.length === 0 && (!appUpdateNoti) ? (
             <div style={{padding:'40px 0'}}>
-              <p style={{fontSize:'14px', color:'var(--text-sub)', margin:0}}>새로운 알림이 없습니다.</p>
+              <p style={{fontSize:'14px', color:'var(--text-sub)', margin:0, fontWeight:'700'}}>새로운 알림이 없습니다.</p>
             </div>
           ) : (
             <div style={{textAlign:'left'}}>
               {notifications.map(n => (
-                <div key={n.id} style={{padding:'12px', borderBottom:'1px solid var(--border)', background: n.isRead ? 'transparent' : '#f9fafb', borderRadius:'4px', marginBottom:'8px', border: n.isRead ? 'none' : '1px solid var(--border)'}}>
+                <div key={n.id} style={{padding:'12px', borderBottom:'1px solid var(--border)', background: n.isRead ? 'transparent' : 'var(--primary-light)', borderRadius:'4px', marginBottom:'8px', border: n.isRead ? 'none' : '1px solid var(--border)'}}>
                   <div style={{display:'flex', justifyContent:'space-between'}}>
-                    <p style={{margin:0, fontSize:'13px', color: 'var(--text-main)'}}>
-                        <strong>{n.fromName}</strong>님이 {n.type === 'like' ? '회원님의 리포트를 좋아합니다.' : '리포트에 댓글을 남겼습니다.'}
+                    <p style={{margin:0, fontSize:'13px', color: n.isRead ? 'var(--text-sub)' : 'var(--text-main)', fontWeight:'600'}}>
+                        <strong>{n.fromName}</strong>님이 {n.type === 'like' ? '회원님의 리포트를 좋아합니다.' : '회원님의 리포트에 댓글을 남겼습니다.'}
                     </p>
-                    {n.isRead && <span style={{fontSize:'11px', color:'var(--text-sub)'}}>읽음</span>}
+                    {n.isRead && <span style={{fontSize:'11px', color:'var(--text-sub)', whiteSpace:'nowrap', marginLeft:'8px'}}>읽음</span>}
                   </div>
                 </div>
               ))}
@@ -2166,58 +2848,62 @@ export default function App() {
 
       <div className={`bottom-sheet-overlay ${postOptionsMenu ? 'active' : ''}`} onClick={() => setPostOptionsMenu(null)}></div>
       <div className={`bottom-sheet ${postOptionsMenu ? 'active' : ''}`}>
-        <p style={{ margin: '0 0 20px 0', fontWeight: 800, textAlign: 'center' }}>게시물 옵션</p>
-        <button className="sheet-btn" onClick={() => { setPostOptionsMenu(null); setIsReportPostModalOpen(true); }}>게시물 신고</button>
-        <button className="sheet-btn" style={{color:'var(--danger)'}} onClick={blockUser}>작업자 차단</button>
+        <p style={{ margin: '0 0 20px 0', fontWeight: 900, textAlign: 'center' }}>게시물 옵션</p>
+        <button className="sheet-btn" onClick={() => { setPostOptionsMenu(null); setIsReportPostModalOpen(true); }}>게시물 신고하기</button>
+        <button className="sheet-btn" style={{color:'var(--danger)'}} onClick={blockUser}>이 작업자 차단하기</button>
         <button className="sheet-btn cancel" onClick={() => setPostOptionsMenu(null)}>취소</button>
       </div>
 
       <div className={`modal-overlay ${isReportPostModalOpen ? 'active' : ''}`}>
         <div className="modal-content">
-          <h3 style={{ marginTop: 0, marginBottom: '12px' }}>게시물 신고</h3>
-          <p style={{ fontSize: '13px', color: 'var(--text-sub)', marginBottom: '16px' }}>신고 사유를 적어주시면 관리자가 검토합니다.</p>
-          <textarea className="title-input" style={{height:'100px', resize:'none', marginBottom:'16px'}} placeholder="신고 사유 입력" value={reportReason} onChange={(e) => setReportReason(e.target.value)}></textarea>
-          <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none' }} onClick={submitReportPost}>신고 접수</button>
+          <h3 style={{ marginTop: 0, marginBottom: '12px', fontWeight:'900' }}>게시물 신고</h3>
+          <p style={{ fontSize: '13px', color: 'var(--text-sub)', marginBottom: '16px', fontWeight:'600' }}>신고 사유를 구체적으로 적어주세요. 관리자 검토 후 조치되며 Firestore DB에 저장됩니다.</p>
+          <textarea className="title-input" style={{height:'100px', resize:'none', marginBottom:'16px'}} placeholder="신고 사유 입력..." value={reportReason} onChange={(e) => setReportReason(e.target.value)}></textarea>
+          <button className="sheet-btn" style={{ background: 'var(--danger)', color: 'white', border: 'none' }} onClick={submitReportPost}>신고 접수</button>
           <button className="sheet-btn cancel" onClick={() => { setIsReportPostModalOpen(false); setReportReason(''); }}>취소</button>
         </div>
       </div>
 
       <div className={`modal-overlay ${isFeedbackModalOpen ? 'active' : ''}`}>
         <div className="modal-content">
-          <h3 style={{ marginTop: 0, marginBottom: '12px' }}>피드백 전송</h3>
-          <select className="title-input" style={{ marginBottom: '12px' }} value={feedbackCategory} onChange={(e) => setFeedbackCategory(e.target.value)}>
+          <h3 style={{ marginTop: 0, marginBottom: '12px', fontWeight:'900' }}>개발자에게 피드백 전송</h3>
+          <p style={{ fontSize: '13px', color: 'var(--text-sub)', marginBottom: '16px', fontWeight:'600' }}>작성하신 피드백은 안전하게 저장되며, 앱 개선에 활용됩니다.</p>
+          
+          <select className="title-input" style={{ marginBottom: '12px', padding: '12px', fontSize: '14px', width: '100%', cursor: 'pointer' }} value={feedbackCategory} onChange={(e) => setFeedbackCategory(e.target.value)}>
             <option value="기능 관련">기능 관련</option>
             <option value="오류 제보">오류 제보</option>
             <option value="디자인">디자인</option>
             <option value="기타">기타</option>
           </select>
-          <textarea className="title-input" style={{height:'100px', resize:'none', marginBottom:'16px'}} placeholder="자유롭게 적어주세요." value={feedbackText} onChange={(e) => setFeedbackText(e.target.value)}></textarea>
+          <textarea className="title-input" style={{height:'100px', resize:'none', marginBottom:'16px'}} placeholder="자유롭게 적어주세요!" value={feedbackText} onChange={(e) => setFeedbackText(e.target.value)}></textarea>
+          
           <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none', marginBottom:'24px' }} onClick={submitFeedback}>보내기</button>
           
           <div style={{textAlign:'left', borderTop:'1px solid var(--border)', paddingTop:'16px'}}>
-            <h4 style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 12px 0'}}>내 피드백 내역 ({myFeedbacks.length})</h4>
+            <h4 style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 12px 0', fontWeight:'900'}}>내가 보낸 피드백 내역 ({myFeedbacks.length}건)</h4>
             <div style={{maxHeight:'150px', overflowY:'auto'}}>
               {myFeedbacks.length === 0 ? (
-                <p style={{fontSize:'13px', color:'var(--text-sub)', textAlign:'center'}}>내역이 없습니다.</p>
+                <p style={{fontSize:'13px', color:'var(--text-sub)', textAlign:'center', fontWeight:'700'}}>전송한 피드백이 없습니다.</p>
               ) : (
                 myFeedbacks.map(fb => (
-                  <div key={fb.id} style={{background:'#f9fafb', padding:'10px', borderRadius:'4px', marginBottom:'8px', border:'1px solid var(--border)'}}>
-                    <div style={{fontSize:'12px', fontWeight:'800', color:'var(--text-main)'}}>[{fb.category}]</div>
-                    <div style={{fontSize:'13px', color:'var(--text-sub)', marginTop:'4px'}}>{fb.text}</div>
+                  <div key={fb.id} style={{background:'var(--primary-light)', padding:'10px', borderRadius:'4px', marginBottom:'8px', border:'1px solid var(--border)'}}>
+                    <div style={{fontSize:'12px', fontWeight:'900', color:'var(--text-main)'}}>[{fb.category}]</div>
+                    <div style={{fontSize:'13px', color:'var(--text-main)', marginTop:'4px', fontWeight:'600'}}>{fb.text}</div>
                   </div>
                 ))
               )}
             </div>
           </div>
+          
           <button className="sheet-btn cancel" onClick={() => setIsFeedbackModalOpen(false)}>닫기</button>
         </div>
       </div>
 
       <div className={`bottom-sheet-overlay ${isPhotoSheetOpen ? 'active' : ''}`} onClick={() => setIsPhotoSheetOpen(false)}></div>
       <div className={`bottom-sheet ${isPhotoSheetOpen ? 'active' : ''}`}>
-        <p style={{ margin: '0 0 20px 0', fontWeight: 800, textAlign: 'center' }}>사진 첨부</p>
-        <button className="sheet-btn" onClick={() => triggerPhotoInput('camera')}>카메라로 촬영</button>
-        <button className="sheet-btn" onClick={() => triggerPhotoInput('gallery')}>앨범에서 선택</button>
+        <p style={{ margin: '0 0 20px 0', fontWeight: 900, textAlign: 'center' }}>사진 첨부 방식 선택</p>
+        <button className="sheet-btn" onClick={() => triggerPhotoInput('camera')}>카메라로 바로 촬영</button>
+        <button className="sheet-btn" onClick={() => triggerPhotoInput('gallery')}>스마트폰 앨범에서 선택</button>
         <button className="sheet-btn cancel" onClick={() => setIsPhotoSheetOpen(false)}>취소</button>
       </div>
 
@@ -2232,19 +2918,19 @@ export default function App() {
 
       <div className={`modal-overlay ${isFinishModalOpen ? 'active' : ''}`}>
         <div className="modal-content">
-          <h3 style={{ marginTop: 0, marginBottom: '20px' }}>작성 완료!</h3>
-          <p style={{ fontSize: '14px', color: 'var(--text-sub)', marginBottom: '20px' }}>피드에 등록되었습니다.</p>
-          <button className="sheet-btn" style={{ background: 'var(--kakao)', color: 'var(--kakao-text)', border: 'none', fontWeight:'800' }} onClick={() => {setIsFinishModalOpen(false); setIsAlimtalkModalOpen(true);}}>카카오 알림톡 전송</button>
-          <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none' }} onClick={() => { copyLink(latestReportId); setTimeout(() => { setIsFinishModalOpen(false); setTaskTitle(''); setTaskDate(getToday()); setSpaces([{...defaultSpace}]); setIsPrivateUpload(false); switchView('feed'); }, 1500); }}>링크 복사</button>
+          <h3 style={{ marginTop: 0, marginBottom: '20px', fontWeight:'900' }}>리포트 작성 완료!</h3>
+          <p style={{ fontSize: '14px', color: 'var(--text-sub)', marginBottom: '20px', fontWeight:'600' }}>피드에 등록되었습니다.<br/>고객에게 공유해 보세요!</p>
+          <button className="sheet-btn" style={{ background: 'var(--kakao)', color: 'var(--kakao-text)', border: 'none', fontWeight:'900' }} onClick={() => {setIsFinishModalOpen(false); setIsAlimtalkModalOpen(true);}}>고객에게 카카오 알림톡 전송</button>
+          <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none' }} onClick={() => { copyLink(latestReportId); setTimeout(() => { setIsFinishModalOpen(false); setTaskTitle(''); setTaskDate(getToday()); setSpaces([{...defaultSpace}]); setIsPrivateUpload(false); switchView('feed'); }, 1500); }}>카톡용 리포트 링크 복사</button>
           <button className="sheet-btn cancel" onClick={() => { setIsFinishModalOpen(false); setTaskTitle(''); setTaskDate(getToday()); setSpaces([{...defaultSpace}]); setIsPrivateUpload(false); switchView('feed'); }}>피드로 가기</button>
         </div>
       </div>
 
       <div className={`modal-overlay ${confirmDialog.show ? 'active' : ''}`}>
         <div className="modal-content" style={{width:'80%', maxWidth:'320px', padding:'24px 20px'}}>
-            <h3 style={{marginTop:0, marginBottom:'16px', fontSize:'16px', color:'var(--text-main)', lineHeight:'1.5'}}>{confirmDialog.msg}</h3>
+            <h3 style={{marginTop:0, marginBottom:'16px', fontSize:'16px', color:'var(--text-main)', lineHeight:'1.5', fontWeight:'800'}}>{confirmDialog.msg}</h3>
             <div style={{display:'flex', gap:'10px', marginTop:'20px'}}>
-                <button className="sheet-btn cancel" style={{flex:1, margin:0}} onClick={() => setConfirmDialog({show:false, msg:'', onConfirm:null})}>취소</button>
+                <button className="sheet-btn cancel" style={{flex:1, margin:0, background:'var(--primary-light)', color:'var(--text-main)'}} onClick={() => setConfirmDialog({show:false, msg:'', onConfirm:null})}>취소</button>
                 <button className="sheet-btn" style={{flex:1, margin:0, background:'var(--text-main)', color:'white', border:'none'}} onClick={confirmDialog.onConfirm}>확인</button>
             </div>
         </div>
