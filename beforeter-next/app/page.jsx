@@ -36,7 +36,7 @@ import {
   getDownloadURL 
 } from "firebase/storage";
 
-// 💡 [수정됨] Next.js 빌더가 환경변수를 올바르게 치환하면서도 브라우저 오류를 막는 안전한 선언
+// 💡 Next.js 빌더가 환경변수를 올바르게 치환하면서도 브라우저 오류를 막는 안전한 선언
 let firebaseConfig;
 if (typeof __firebase_config !== 'undefined' && __firebase_config) {
   firebaseConfig = JSON.parse(__firebase_config); // 캔버스 미리보기용
@@ -54,7 +54,7 @@ if (typeof __firebase_config !== 'undefined' && __firebase_config) {
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
-auth.languageCode = 'ko'; // 💡 [추가됨] 카카오 로그인 및 이메일 인증 언어를 한국어로 강제 고정
+auth.languageCode = 'ko'; // 카카오 로그인 및 이메일 인증 언어를 한국어로 강제 고정
 const googleProvider = new GoogleAuthProvider();
 const kakaoProvider = new OAuthProvider('oidc.kakao');
 const db = getFirestore(app); 
@@ -63,7 +63,6 @@ const storage = getStorage(app);
 const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'beforeter-app';
 const APP_VERSION = 'v1.0.4 (2026-06-03 배포)';
 
-// 💡 [수정됨] process 오류 방지
 const EMAILJS_SERVICE_ID = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID : "";
 const EMAILJS_TEMPLATE_ID = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID : "";
 const EMAILJS_PUBLIC_KEY = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_EMAILJS_PUBLIC_KEY : "";
@@ -561,6 +560,7 @@ export default function App() {
   const processLogout = async () => {
     try { 
       await signOut(auth); 
+      // 💡 [수정됨] 로그아웃 시 기존 폼 입력 데이터들을 안전하게 초기화합니다.
       setAuthEmail('');
       setAuthPassword('');
       setAuthName('');
@@ -574,12 +574,17 @@ export default function App() {
     }
   };
 
+  // 💡 [수정됨] 회원 탈퇴 시 Firestore의 사용자 정보도 함께 삭제하도록 로직을 강화했습니다.
   const deleteAccount = async () => {
-    triggerConfirm("정말 탈퇴하시겠습니까? 작성한 데이터는 삭제되지 않습니다.", async () => {
+    triggerConfirm("정말 탈퇴하시겠습니까? 작성한 리포트는 유지되나, 계정 정보가 삭제됩니다.", async () => {
         try {
             const user = auth.currentUser;
             if (user) {
+                // Firestore 데이터 삭제 추가
+                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.uid));
+                // Firebase Auth 계정 삭제
                 await deleteUser(user);
+                
                 showToast("회원 탈퇴가 완료되었습니다.");
                 setIsMenuOpen(false);
                 switchView('feed');
@@ -740,8 +745,6 @@ export default function App() {
     
     try {
       const timeStamp = Date.now();
-      const snap = await getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'reports'));
-      const reportNo = String(snap.size + 1).padStart(6, '0');
       
       const uploadedSpaces = await Promise.all(spaces.map(async (sp, idx) => {
           let bUrl = sp.beforeImg; let aUrl = sp.afterImg;
@@ -757,7 +760,7 @@ export default function App() {
       }));
       
       const docRef = await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'reports'), {
-        reportNo: reportNo, authorId: currentUser.id, authorName: currentUser.name || '작업자', 
+        authorId: currentUser.id, authorName: currentUser.name || '작업자', 
         authorCompany: currentUser.company || '', authorPic: currentUser.profilePic || '', 
         title: taskTitle, taskDate: taskDate, category: taskCategory, spaces: uploadedSpaces, 
         status: isPrivateUpload ? 'private' : 'public', history: [], comments: [], likes: [],
@@ -939,6 +942,7 @@ export default function App() {
   const publicProfileFeeds = publicProfileUser ? publicFeeds.filter(f => f.authorId === publicProfileUser.id) : [];
   const unreadNotis = notifications.filter(n => !n.isRead).length + (appUpdateNoti && !appUpdateNoti.isRead ? 1 : 0);
 
+  // 💡 [수정됨] 회원가입 폼 유효성 검사 (이름 필수, 연락처 제거됨)
   const isSignupValid = authName.trim() && authEmail.trim() && authPassword.length >= 6 && termsAgreed && privacyAgreed;
   const isLoginValid = authEmail.trim() && authPassword.trim();
 
@@ -1164,14 +1168,9 @@ export default function App() {
             
             <ul style={{listStyle:'none', padding:0, margin:0, borderTop:'1px solid var(--border)', background:'var(--primary-light)'}}>
               {currentUser ? (
-                <>
-                    <li>
-                    <button onClick={processLogout} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🚪 로그아웃</button>
-                    </li>
-                    <li>
-                    <button onClick={deleteAccount} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', paddingTop:0, color:'var(--danger)', fontSize:'13px', fontWeight:700, cursor:'pointer', textDecoration:'underline'}}>회원 탈퇴하기</button>
-                    </li>
-                </>
+                <li>
+                  <button onClick={processLogout} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🚪 로그아웃</button>
+                </li>
               ) : (
                 <li>
                   <button onClick={() => { setIsMenuOpen(false); switchView('login'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🔐 로그인 / 회원가입</button>
@@ -1300,7 +1299,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 💡 뷰: 로그인 & 회원가입 화면 (이름, 이메일만 입력받도록 개선) */}
+      {/* 💡 [수정됨] 뷰: 로그인 & 회원가입 화면 (이름, 이메일만 입력받도록 개선) */}
       {currentView === 'login' && (
         <div className="view-section" style={{ display:'flex', background:'white' }}>
           <div className="login-container">
@@ -1420,7 +1419,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 뷰: 마이페이지 */}
+      {/* 💡 [수정됨] 뷰: 마이페이지 (이메일 정보 표시 및 탈퇴 버튼 은닉) */}
       {currentView === 'mypage' && currentUser && (
         <div className="view-section">
           <div className="mypage-header" style={{background: 'var(--card-bg)', padding: '30px 20px', textAlign: 'center', borderBottom: '1px solid var(--border)', position: 'relative'}}>
@@ -1439,6 +1438,11 @@ export default function App() {
             </h2>
             {currentUser.company && <p style={{margin:'4px 0 0 0', fontSize:'14px', color:'var(--text-sub)', fontWeight:'600'}}>{currentUser.company}</p>}
             
+            {/* 💡 [추가됨] 가입 이메일 및 제공자 표시 */}
+            <p style={{margin:'8px 0 0 0', fontSize:'13px', color:'var(--text-sub)', fontWeight:'700'}}>
+              📧 {currentUser.email || '이메일 없음'} &nbsp;|&nbsp; 🔗 {currentUser.provider === 'Email' ? '이메일' : currentUser.provider} 가입
+            </p>
+
             <div style={{marginTop:'12px'}}>
                 <p style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 8px 0', fontWeight:'700'}}>{currentUser.intro || '자기소개를 입력해주세요.'}</p>
                 <div style={{display:'flex', gap:'6px', justifyContent:'center', flexWrap:'wrap'}}>
@@ -1457,7 +1461,7 @@ export default function App() {
               </div>
             </div>
             
-            {/* 💡 마이페이지 하단에 위치한 회원 탈퇴 버튼 */}
+            {/* 💡 [수정됨] 마이페이지 맨 하단에 은닉된 회원 탈퇴 버튼 */}
             <div style={{ marginTop: '40px', textAlign: 'center' }}>
                 <button onClick={deleteAccount} style={{ background: 'none', border: 'none', color: 'var(--text-sub)', fontSize: '12px', textDecoration: 'underline', cursor: 'pointer' }}>회원 탈퇴</button>
             </div>
@@ -1470,13 +1474,9 @@ export default function App() {
               </div>
             ) : (
               myFeeds.map((item, idx) => {
-                  const myReportIndex = myFeeds.length - idx; 
                   const renderSpaces = item.spaces && item.spaces.length > 0 ? item.spaces : [{ beforeImg: item.beforeImg, afterImg: item.afterImg }];
                   return (
                     <div key={item.id} className="feed-card" onClick={() => openDetailView(item.id)}>
-                      <div style={{display:'inline-block', background:'var(--text-main)', color:'white', fontSize:'11px', fontWeight:'800', padding:'4px 8px', borderRadius:'4px', marginBottom:'8px'}}>
-                        내 리포트 {myReportIndex}
-                      </div>
                       <div className="feed-title" style={{marginBottom: '10px'}}>
                         {item.status === 'private' ? '🔒 ' : ''}{item.title}
                       </div>
@@ -1638,7 +1638,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 뷰: 리포트 상세 보기 */}
+      {/* 💡 [수정됨] 뷰: 리포트 상세 보기 (넘버링 제거) */}
       {currentView === 'detail' && detailReport && (
         <div className="view-section" style={{paddingTop: '20px'}}>
           <div className="feed-container">
@@ -1653,8 +1653,7 @@ export default function App() {
             </div>
             
             <div className="detail-card" style={{position:'relative'}}>
-              {detailReport.reportNo && <div style={{position:'absolute', top:'-14px', left:'20px', background:'var(--text-main)', color:'white', padding:'4px 12px', borderRadius:'4px', fontSize:'12px', fontWeight:'800', letterSpacing:'1px'}}>No. {detailReport.reportNo}</div>}
-              <div style={{borderBottom:'1px solid var(--border)', paddingBottom:'16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: detailReport.reportNo ? '10px' : '0'}}>
+              <div style={{borderBottom:'1px solid var(--border)', paddingBottom:'16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0'}}>
                 <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
                   <div className="author-avatar" style={{border:'1px solid var(--border)'}} onClick={() => setSelectedImage(detailReport.authorPic)}>
                     {detailReport.authorPic ? <img src={detailReport.authorPic} alt="프로필" /> : (detailReport.authorName || '작업자').charAt(0)}
