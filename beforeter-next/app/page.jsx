@@ -11,7 +11,9 @@ import {
   setPersistence, 
   browserLocalPersistence,
   createUserWithEmailAndPassword,
-  signInWithEmailAndPassword
+  signInWithEmailAndPassword,
+  signInWithCustomToken,
+  signInAnonymously
 } from "firebase/auth";
 import { 
   getFirestore, 
@@ -122,6 +124,7 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
   const [authPhone, setAuthPhone] = useState('');
+  const [isAuthReady, setIsAuthReady] = useState(false); // 💡 [추가] 인증 상태 준비 여부
 
   // 유저 및 데이터 상태
   const [currentUser, setCurrentUser] = useState(null); 
@@ -274,6 +277,10 @@ export default function App() {
             isRead: false
         });
     }
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthReady) return; // 💡 [수정됨] 인증이 완료된 후 라우팅 및 데이터 로드 진행
 
     const handleRouting = async (path, isPop = false) => {
         if (path === '/' || path === '') {
@@ -314,7 +321,7 @@ export default function App() {
     const popStateHandler = () => handleRouting(window.location.pathname, true);
     window.addEventListener('popstate', popStateHandler);
     return () => window.removeEventListener('popstate', popStateHandler);
-  }, []);
+  }, [isAuthReady]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -325,20 +332,22 @@ export default function App() {
 
   useEffect(() => {
     const initAuth = async () => {
-      // 캔버스(미리보기) 환경용 자동 토큰 로그인 로직
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        try {
-          // signInWithCustomToken 대신 앱 내부 인증 흐름 유지
-          // 캔버스 환경에서도 Firebase Config가 제공되면 자체 로그인이 우선됨
-        } catch(e) {
-          console.warn("Canvas auth fallback", e);
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
         }
+      } catch(e) {
+        console.warn("Canvas auth fallback error", e);
       }
     };
     initAuth();
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
+      setIsAuthReady(true); // 💡 [수정됨] 인증 상태 확인 완료
+      
+      if (user && !user.isAnonymous) { // 💡 [수정됨] 익명 사용자는 무시하고 실제 가입한 로그인 유저만 처리
         try {
           const userRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.uid);
           const userSnap = await getDoc(userRef);
@@ -361,7 +370,6 @@ export default function App() {
           if (userSnap.exists()) {
             userData = { ...userData, ...userSnap.data(), id: user.uid };
           } else {
-            // 이메일 가입이 아닐 경우(소셜)에만 자동 생성 (이메일 가입은 직접 생성함)
             if (userData.provider !== 'Email') {
               await setDoc(userRef, userData);
               sendEmailNotification(
@@ -424,6 +432,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!isAuthReady) return; // 💡 [수정됨] 인증이 완료된 후에만 데이터 읽기 수행
+
     const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'reports'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const reports = [];
@@ -440,7 +450,7 @@ export default function App() {
       }
     }, (error) => console.error("데이터 읽기 오류:", error));
     return () => unsubscribe();
-  }, [detailReport]);
+  }, [isAuthReady, detailReport]);
 
   useEffect(() => {
     if (currentView === 'upload' && shareLocation) {
