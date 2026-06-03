@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef } from 'react';
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { 
   getAuth, 
   signInWithPopup, 
@@ -12,8 +12,7 @@ import {
   browserLocalPersistence,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  signInWithCustomToken,
-  signInAnonymously
+  deleteUser
 } from "firebase/auth";
 import { 
   getFirestore, 
@@ -37,51 +36,37 @@ import {
   getDownloadURL 
 } from "firebase/storage";
 
-// 💡 [수정됨] process is not defined 오류를 방지하는 안전한 환경변수 호출기
-const getSafeEnv = (key) => {
-  if (typeof process !== 'undefined' && process.env) {
-    return process.env[key];
-  }
-  return '';
-};
-
-// 💡 [수정됨] Canvas 미리보기 환경 지원 및 API 키 누락 시 앱 충돌(Crash) 완벽 방지
+// 💡 [수정됨] Next.js 빌더가 환경변수를 올바르게 치환하면서도 브라우저 오류를 막는 안전한 선언
 let firebaseConfig;
-try {
-  if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-    firebaseConfig = JSON.parse(__firebase_config);
-  } else {
-    firebaseConfig = {
-      apiKey: getSafeEnv('NEXT_PUBLIC_FIREBASE_API_KEY') || "dummy_api_key_to_prevent_crash",
-      authDomain: getSafeEnv('NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN'),
-      projectId: getSafeEnv('NEXT_PUBLIC_FIREBASE_PROJECT_ID'),
-      storageBucket: getSafeEnv('NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET'),
-      messagingSenderId: getSafeEnv('NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID'),
-      appId: getSafeEnv('NEXT_PUBLIC_FIREBASE_APP_ID')
-    };
-  }
-} catch (e) {
-  firebaseConfig = { apiKey: "dummy_api_key_to_prevent_crash" };
+if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+  firebaseConfig = JSON.parse(__firebase_config); // 캔버스 미리보기용
+} else {
+  // 실제 로컬 및 Vercel 구동용 환경변수 직접 할당
+  firebaseConfig = {
+    apiKey: typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_API_KEY : '',
+    authDomain: typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN : '',
+    projectId: typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID : '',
+    storageBucket: typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET : '',
+    messagingSenderId: typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID : '',
+    appId: typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_APP_ID : ''
+  };
 }
 
-const app = initializeApp(firebaseConfig);
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
+auth.languageCode = 'ko'; // 💡 [추가됨] 카카오 로그인 및 이메일 인증 언어를 한국어로 강제 고정
 const googleProvider = new GoogleAuthProvider();
-// 카카오 로그인을 위한 OIDC 프로바이더 설정 (Firebase 콘솔 세팅 필요)
 const kakaoProvider = new OAuthProvider('oidc.kakao');
 const db = getFirestore(app); 
 const storage = getStorage(app); 
 
-// 💡 [수정됨] 미리보기 환경에서도 권한 오류가 나지 않도록 앱 ID 자동 매핑
 const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'beforeter-app';
+const APP_VERSION = 'v1.0.4 (2026-06-03 배포)';
 
-// 🌟 [배포 버전 관리] 새롭게 배포하실 때마다 이 값을 변경해주세요. (예: v1.0.2)
-// 이 값이 로컬스토리지의 값과 다르면 접속 시 유저에게 업데이트 알림을 띄웁니다.
-const APP_VERSION = 'v1.0.2 (2026-05-31 배포)';
-
-const EMAILJS_SERVICE_ID = getSafeEnv('NEXT_PUBLIC_EMAILJS_SERVICE_ID');
-const EMAILJS_TEMPLATE_ID = getSafeEnv('NEXT_PUBLIC_EMAILJS_TEMPLATE_ID');
-const EMAILJS_PUBLIC_KEY = getSafeEnv('NEXT_PUBLIC_EMAILJS_PUBLIC_KEY');
+// 💡 [수정됨] process 오류 방지
+const EMAILJS_SERVICE_ID = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID : "";
+const EMAILJS_TEMPLATE_ID = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID : "";
+const EMAILJS_PUBLIC_KEY = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_EMAILJS_PUBLIC_KEY : "";
 
 const TERMS_OF_SERVICE = `
 제1조 (목적)
@@ -116,7 +101,7 @@ const PRIVACY_POLICY = `
 - 고충 처리: 민원인의 신원 확인, 민원사항 확인, 사실조사를 위한 연락·통지, 처리결과 통보
 
 2. 수집하는 개인정보의 항목
-- 필수항목: 이메일 주소, 이름(닉네임), 프로필 사진, 식별자(SNS 로그인 시)
+- 필수항목: 이메일 주소, 이름(닉네임), 프로필 사진, 전화번호, 식별자(SNS 로그인 시)
 - 선택항목: 사업자등록번호, 상호명, 연락처, 자기소개, 전문분야 키워드
 
 3. 개인정보의 보유 및 이용기간
@@ -129,7 +114,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState('feed'); 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   
-  // 💡 [추가됨] 인증 폼 상태 (로그인 / 회원가입)
+  // 인증 폼 상태 (로그인 / 회원가입)
   const [authMode, setAuthMode] = useState('login'); 
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -141,21 +126,18 @@ export default function App() {
   const [feedData, setFeedData] = useState([]); 
   const [notifications, setNotifications] = useState([]);
   const [myFeedbacks, setMyFeedbacks] = useState([]); 
-  const [appUpdateNoti, setAppUpdateNoti] = useState(null); // 앱 배포 업데이트 알림
-  const [pendingBizUsers, setPendingBizUsers] = useState([]); // 사업자 검수 대기 유저 목록 (관리자용)
+  const [appUpdateNoti, setAppUpdateNoti] = useState(null); 
+  const [pendingBizUsers, setPendingBizUsers] = useState([]); 
   
-  // 로컬 스토리지 차단 목록 초기화 (Next.js 에러 방지용)
-  const getInitialBlocked = () => {
-    // 서버에서 실행될 때는 localStorage를 찾지 않고 빈 배열을 반환합니다.
-    if (typeof window === 'undefined') return [];
+  // 로컬 스토리지 차단 목록 초기화
+  const [blockedUsers, setBlockedUsers] = useState([]);
+  
+  useEffect(() => {
     try {
       const stored = localStorage.getItem('beporter_blocked');
-      return stored ? JSON.parse(stored) : [];
-    } catch(e) {
-      return [];
-    }
-  };
-  const [blockedUsers, setBlockedUsers] = useState(getInitialBlocked());
+      if (stored) setBlockedUsers(JSON.parse(stored));
+    } catch(e) {}
+  }, []);
   
   // 모달 및 UI 상태
   const [isPhotoSheetOpen, setIsPhotoSheetOpen] = useState(false);
@@ -167,7 +149,7 @@ export default function App() {
   const [isNotiModalOpen, setIsNotiModalOpen] = useState(false);
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
   const [isAlimtalkModalOpen, setIsAlimtalkModalOpen] = useState(false);
-  const [isAlimtalkSending, setIsAlimtalkSending] = useState(false); // 알림톡 전송 중 상태
+  const [isAlimtalkSending, setIsAlimtalkSending] = useState(false); 
   
   const [postOptionsMenu, setPostOptionsMenu] = useState(null); 
   const [isReportPostModalOpen, setIsReportPostModalOpen] = useState(false);
@@ -212,6 +194,7 @@ export default function App() {
   const [editProfilePic, setEditProfilePic] = useState('');
   const [editIntro, setEditIntro] = useState('');
   const [editKeywords, setEditKeywords] = useState('');
+  const [editPhone, setEditPhone] = useState(''); 
 
   const [latestReportId, setLatestReportId] = useState('');
   const [detailReport, setDetailReport] = useState(null);
@@ -227,85 +210,37 @@ export default function App() {
   const [feedFilter, setFeedFilter] = useState('전체'); 
   const [reportReason, setReportReason] = useState('');
   
-  // 카테고리 순서 변경: 전체, 인테리어, 청소, 미용, 건설, 기타
   const categories = ['전체', '인테리어', '청소', '미용', '건설', '기타'];
 
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
   const profilePicRef = useRef(null);
 
-  // 공용 메일 발송 함수 (EmailJS REST API 직접 호출)
   const sendEmailNotification = async (subject, message) => {
-    if (!EMAILJS_SERVICE_ID || EMAILJS_SERVICE_ID === "YOUR_SERVICE_ID") {
-        console.warn("EmailJS 키가 아직 설정되지 않아 메일을 발송하지 못했습니다.");
-        return;
-    }
-    
+    if (!EMAILJS_SERVICE_ID || EMAILJS_SERVICE_ID === "YOUR_SERVICE_ID") return;
     try {
         const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 service_id: EMAILJS_SERVICE_ID,
                 template_id: EMAILJS_TEMPLATE_ID,
                 user_id: EMAILJS_PUBLIC_KEY,
-                template_params: {
-                    subject: subject,
-                    message: message,
-                }
+                template_params: { subject: subject, message: message }
             })
         });
-
-        if (response.ok) {
-            console.log("EmailJS 전송 성공");
-        } else {
-            const errorText = await response.text();
-            console.error("EmailJS 전송 실패:", errorText);
-        }
+        if (!response.ok) console.error("EmailJS 전송 실패");
     } catch (error) {
         console.error("EmailJS 네트워크 전송 에러:", error);
     }
   };
 
-  // 카카오톡 링크 공유 시 미리보기를 위한 동적 메타태그 변경 함수
   const updateMetaTags = (report) => {
     if (!report) return;
-    
-    // 타이틀 변경
     document.title = `${report.title} - 비포터`;
-    
-    // 메타 태그 업데이트 유틸
-    const setMeta = (property, content, isName = false) => {
-      let element = document.querySelector(`meta[${isName ? 'name' : 'property'}="${property}"]`);
-      if (!element) {
-        element = document.createElement('meta');
-        if (isName) element.setAttribute('name', property);
-        else element.setAttribute('property', property);
-        document.head.appendChild(element);
-      }
-      element.setAttribute('content', content);
-    };
-
-    // 카카오톡에 멋지게 보이기 위한 상세 정보 세팅
-    const description = `[${report.authorName}] 프로님의 작업 결과물을 확인해보시겠어요? \n📅 작업일: ${report.taskDate} \n📍 장소: ${report.location || '미상'}`;
-    
-    const coverImg = report.spaces && report.spaces.length > 0 
-      ? report.spaces[0].afterImg 
-      : (report.afterImg || 'https://www.beforeter.com/default-og.png');
-
-    // 카카오톡 스크랩봇을 위한 Open Graph 태그 강화
-    setMeta('og:title', `${report.title} - 비포터`);
-    setMeta('og:description', description);
-    setMeta('og:image', coverImg);
-    setMeta('og:type', 'website');
-    setMeta('og:site_name', '비포터 (Beforeter)');
-    setMeta('description', description, true); // 일반 검색엔진용
   };
 
   useEffect(() => {
-    // 앱 버전 확인 및 신규 배포 알림 로직
     const storedVersion = localStorage.getItem('beporter_version');
     if (storedVersion !== APP_VERSION) {
         setAppUpdateNoti({
@@ -366,18 +301,6 @@ export default function App() {
   }, [banners.length]);
 
   useEffect(() => {
-    // 💡 [추가됨] Canvas 환경에서의 데이터 접근 권한을 위한 자동 인증 처리 방어 코드
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        }
-      } catch (e) {
-        console.warn("Canvas auth fallback error", e);
-      }
-    };
-    initAuth();
-
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         try {
@@ -389,7 +312,7 @@ export default function App() {
             name: user.displayName || '작업자', 
             company: '',
             bizNum: '',
-            bizStatus: 'none', // 사업자 검수 상태: none, pending, approved, rejected
+            bizStatus: 'none',
             affiliation: '', 
             profilePic: user.photoURL || '', 
             intro: '', 
@@ -402,20 +325,17 @@ export default function App() {
           if (userSnap.exists()) {
             userData = { ...userData, ...userSnap.data(), id: user.uid };
           } else {
-            // 이메일 가입이 아닐 경우(소셜)에만 여기서 자동 생성
             if (userData.provider !== 'Email') {
               await setDoc(userRef, userData);
-              
-              // 💡 [EmailJS] 새로운 유저 가입 알림 메일 전송
               sendEmailNotification(
                   `[비포터] 🎉 새로운 작업자 회원가입!`,
-                  `이름: ${userData.name}\n이메일: ${userData.email}\n가입 플랫폼: ${userData.provider}\n\n새로운 회원이 비포터에 합류했습니다. 환영해 주세요!`
+                  `이름: ${userData.name}\n이메일: ${userData.email}\n가입 플랫폼: ${userData.provider}\n\n새로운 회원이 비포터에 합류했습니다.`
               );
             }
           }
           setCurrentUser(userData);
         } catch (error) {
-          console.error("사용자 DB 연동 중 오류 발생 (권한 등):", error);
+          console.error("사용자 DB 연동 중 오류 발생:", error);
           setCurrentUser({
             id: user.uid, 
             name: user.displayName || '작업자', 
@@ -425,7 +345,6 @@ export default function App() {
           });
         }
         
-        // 내 알림 실시간 동기화
         try {
           const notiQ = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'notifications'), where("targetUserId", "==", user.uid));
           onSnapshot(notiQ, (snap) => {
@@ -436,7 +355,6 @@ export default function App() {
           }, (err) => console.error("알림 로드 오류:", err));
         } catch (e) { console.error(e); }
 
-        // 내가 보낸 피드백 히스토리 동기화
         try {
           const fbQ = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'feedbacks'), where("userId", "==", user.uid));
           onSnapshot(fbQ, (snap) => {
@@ -447,7 +365,6 @@ export default function App() {
           }, (err) => console.error("피드백 로드 오류:", err));
         } catch (e) { console.error(e); }
 
-        // 👑 [관리자 전용] 사업자 검수 대기 목록 실시간 연동
         if (user.email === 'jinthemoon@kakao.com') {
             try {
                 const adminQ = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where("bizStatus", "==", "pending"));
@@ -476,17 +393,21 @@ export default function App() {
       snapshot.forEach((doc) => reports.push({ id: doc.id, ...doc.data() }));
       reports.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
       setFeedData(reports);
-      
-      if (detailReport) {
-        const updated = reports.find(r => r.id === detailReport.id);
-        if (updated) {
-            setDetailReport(updated);
-            updateMetaTags(updated);
-        }
-      }
-    }, (error) => console.error("데이터 읽기 오류:", error));
+    }, (error) => {
+      console.error("데이터 읽기 오류:", error);
+    });
     return () => unsubscribe();
-  }, [detailReport]);
+  }, []); 
+
+  useEffect(() => {
+    if (detailReport && feedData.length > 0) {
+      const updated = feedData.find(r => r.id === detailReport.id);
+      if (updated && JSON.stringify(updated) !== JSON.stringify(detailReport)) {
+          setDetailReport(updated);
+          updateMetaTags(updated);
+      }
+    }
+  }, [feedData]);
 
   useEffect(() => {
     if (currentView === 'upload' && shareLocation) {
@@ -541,10 +462,9 @@ export default function App() {
     setConfirmDialog({ show: true, msg, onConfirm: () => { action(); setConfirmDialog({show: false, msg:'', onConfirm:null}); } });
   };
 
-  // 💡 [추가됨] 이메일 기반 정식 회원가입 로직
   const processEmailSignup = async () => {
     if (!termsAgreed || !privacyAgreed) return showToast("서비스 이용약관 및 개인정보 수집에 동의해주세요.");
-    if (!authName.trim() || !authPhone.trim() || !authEmail.trim() || !authPassword) {
+    if (!authName.trim() || !authEmail.trim() || !authPassword) {
         return showToast("모든 정보를 올바르게 입력해주세요.");
     }
     if (authPassword.length < 6) return showToast("비밀번호는 6자리 이상이어야 합니다.");
@@ -557,7 +477,7 @@ export default function App() {
         const newUserData = {
             id: user.uid,
             name: authName,
-            phone: authPhone,
+            phone: '', 
             email: authEmail,
             provider: 'Email',
             company: '',
@@ -570,13 +490,11 @@ export default function App() {
             createdAt: serverTimestamp()
         };
 
-        // 💡 [데이터 저장 위치 지정] 회원 정보가 저장되는 명확한 경로입니다.
-        // 데이터베이스 경로: artifacts -> beforeter-app -> public -> data -> users -> {user.uid}
         await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.uid), newUserData);
         
         sendEmailNotification(
             `[비포터] 🎉 정식 회원가입 완료!`,
-            `이름: ${authName}\n연락처: ${authPhone}\n이메일: ${authEmail}\n\n이메일 기반 정식 회원가입이 완료되었습니다.`
+            `이름: ${authName}\n이메일: ${authEmail}\n\n이메일 기반 정식 회원가입이 완료되었습니다.`
         );
 
         showToast(`${authName}님, 비포터에 오신 것을 환영합니다!`);
@@ -588,7 +506,6 @@ export default function App() {
     }
   };
 
-  // 💡 [추가됨] 이메일 기반 로그인 로직
   const processEmailLogin = async () => {
     if (!authEmail.trim() || !authPassword) return showToast("이메일과 비밀번호를 입력해주세요.");
     try {
@@ -614,7 +531,7 @@ export default function App() {
     } catch (error) { 
       console.error("구글 로그인 에러:", error);
       if (error.code === 'auth/unauthorized-domain') {
-          triggerConfirm("Firebase 보안 알림: 현재 접속 중인 도메인이 Firebase 승인된 도메인에 등록되어 있지 않아 로그인이 차단되었습니다. Firebase 콘솔(Authentication > 설정)에서 도메인을 추가해주세요.", () => {});
+          triggerConfirm("Firebase 보안 알림: 승인된 도메인에 등록되어 있지 않아 차단되었습니다.", () => {});
       } else {
           showToast("구글 로그인에 실패했습니다."); 
       }
@@ -626,9 +543,7 @@ export default function App() {
         return showToast("서비스 이용약관 및 개인정보 수집에 동의해주세요.");
     }
     try { 
-      kakaoProvider.setCustomParameters({
-        prompt: 'select_account'
-      });
+      kakaoProvider.setCustomParameters({ prompt: 'select_account' });
       await setPersistence(auth, browserLocalPersistence);
       await signInWithPopup(auth, kakaoProvider); 
       showToast(`환영합니다! 카카오톡 로그인이 완료되었습니다.`); 
@@ -636,9 +551,9 @@ export default function App() {
     } catch (error) { 
       console.error("카카오 로그인 에러:", error);
       if (error.code === 'auth/unauthorized-domain') {
-          triggerConfirm("Firebase 보안 알림: 현재 접속 중인 도메인이 Firebase 승인된 도메인에 등록되어 있지 않아 로그인이 차단되었습니다. Firebase 콘솔(Authentication > 설정)에서 도메인을 추가해주세요.", () => {});
+          triggerConfirm("Firebase 보안 알림: 승인된 도메인에 등록되어 있지 않아 차단되었습니다.", () => {});
       } else {
-          showToast("카카오 로그인에 실패했습니다. 관리자 설정(OIDC)을 확인해주세요."); 
+          showToast("카카오 디벨로퍼스 설정(Redirect URI 등)을 확인해 주세요."); 
       }
     }
   };
@@ -646,6 +561,11 @@ export default function App() {
   const processLogout = async () => {
     try { 
       await signOut(auth); 
+      setAuthEmail('');
+      setAuthPassword('');
+      setAuthName('');
+      setAuthPhone('');
+      
       showToast('로그아웃 되었습니다.'); 
       setIsMenuOpen(false); 
       switchView('feed'); 
@@ -654,24 +574,38 @@ export default function App() {
     }
   };
 
-  // 사업자 등록번호 포맷팅 (###-##-####)
+  const deleteAccount = async () => {
+    triggerConfirm("정말 탈퇴하시겠습니까? 작성한 데이터는 삭제되지 않습니다.", async () => {
+        try {
+            const user = auth.currentUser;
+            if (user) {
+                await deleteUser(user);
+                showToast("회원 탈퇴가 완료되었습니다.");
+                setIsMenuOpen(false);
+                switchView('feed');
+            }
+        } catch (error) {
+            console.error(error);
+            if (error.code === 'auth/requires-recent-login') {
+                showToast("보안을 위해 다시 로그인한 후 탈퇴해 주세요.");
+                processLogout();
+            } else {
+                showToast("탈퇴 처리 중 오류가 발생했습니다.");
+            }
+        }
+    });
+  };
+
   const formatBizNum = (value) => {
     const raw = value.replace(/[^0-9]/g, '');
     let res = '';
-    if (raw.length < 4) {
-      res = raw;
-    } else if (raw.length < 6) {
-      res = raw.substring(0, 3) + '-' + raw.substring(3);
-    } else {
-      res = raw.substring(0, 3) + '-' + raw.substring(3, 5) + '-' + raw.substring(5, 10);
-    }
+    if (raw.length < 4) res = raw;
+    else if (raw.length < 6) res = raw.substring(0, 3) + '-' + raw.substring(3);
+    else res = raw.substring(0, 3) + '-' + raw.substring(3, 5) + '-' + raw.substring(5, 10);
     return res;
   };
 
-  const handleBizNumChange = (e) => {
-    const formatted = formatBizNum(e.target.value);
-    setEditBizNum(formatted);
-  };
+  const handleBizNumChange = (e) => setEditBizNum(formatBizNum(e.target.value));
 
   const openProfileEdit = () => { 
     setEditName(currentUser.name || ''); 
@@ -680,6 +614,7 @@ export default function App() {
     setEditProfilePic(currentUser.profilePic || ''); 
     setEditIntro(currentUser.intro || ''); 
     setEditKeywords((currentUser.keywords || []).join(', '));
+    setEditPhone(currentUser.phone || ''); 
     setIsProfileModalOpen(true); 
   };
 
@@ -707,36 +642,24 @@ export default function App() {
   };
 
   const handleProfilePicSelect = (e) => { 
-    if (e.target.files[0]) {
-      resizeAndCompressImage(e.target.files[0], setEditProfilePic, 400); 
-    }
+    if (e.target.files[0]) { resizeAndCompressImage(e.target.files[0], setEditProfilePic, 400); }
     e.target.value = ''; 
   };
 
   const saveProfile = async () => {
     if (!editName.trim()) return showToast("이름을 입력해주세요.");
-    
     const kwdArray = editKeywords.split(',').map(k => k.trim()).filter(k => k !== '').slice(0, 5);
     
     let newBizStatus = currentUser.bizStatus || 'none';
     const isBizNumChanged = editBizNum !== currentUser.bizNum;
     
-    // 사업자 번호가 변경되었고 12자리(###-##-####)를 모두 채웠다면 검수 상태로 변경
-    if (isBizNumChanged && editBizNum.length === 12) {
-        newBizStatus = 'pending';
-    } else if (editBizNum === '') {
-        newBizStatus = 'none';
-    }
+    if (isBizNumChanged && editBizNum.length === 12) newBizStatus = 'pending';
+    else if (editBizNum === '') newBizStatus = 'none';
 
     const updatedUser = { 
-      ...currentUser, 
-      name: editName, 
-      company: editCompany,
-      bizNum: editBizNum,
-      bizStatus: newBizStatus,
-      profilePic: editProfilePic, 
-      intro: editIntro, 
-      keywords: kwdArray 
+      ...currentUser, name: editName, company: editCompany, bizNum: editBizNum,
+      bizStatus: newBizStatus, profilePic: editProfilePic, intro: editIntro, keywords: kwdArray,
+      phone: editPhone
     };
     
     try {
@@ -746,82 +669,58 @@ export default function App() {
       showToast("프로필이 저장되었습니다.");
 
       if (newBizStatus === 'pending') {
-          // 💡 [EmailJS] 사업자 번호 제출 시 알림 메일 전송
           sendEmailNotification(
             `[비포터] 🏢 사업자 등록번호 검수 요청`,
-            `사용자: ${currentUser.name} (${currentUser.id})\n상호명: ${editCompany}\n제출된 사업자등록번호: ${editBizNum}\n\n관리자 메뉴에서 검수를 진행해주세요.`
+            `사용자: ${currentUser.name} (${currentUser.id})\n상호명: ${editCompany}\n사업자번호: ${editBizNum}`
           );
-          showToast("사업자 등록번호 검수가 요청되었습니다.");
+          showToast("사업자 검수가 요청되었습니다.");
       }
-
-    } catch(e) { 
-      console.error(e);
-      showToast("프로필 저장에 실패했습니다."); 
-    }
+    } catch(e) { showToast("프로필 저장에 실패했습니다."); }
   };
 
-  // 👑 [관리자 전용] 사업자 승인 및 거절 함수
   const approveBiz = async (userId, userName) => {
     triggerConfirm(`[${userName}]님의 사업자를 승인하시겠습니까?`, async () => {
         try {
             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userId), { bizStatus: 'approved' });
-            showToast("사업자 승인 완료!");
-        } catch(e) { showToast("승인 처리 실패"); }
+            showToast("승인 완료!");
+        } catch(e) { showToast("승인 실패"); }
     });
   };
 
   const rejectBiz = async (userId, userName) => {
-    triggerConfirm(`[${userName}]님의 사업자를 거절하시겠습니까? (번호는 삭제됩니다)`, async () => {
+    triggerConfirm(`[${userName}]님의 사업자를 거절하시겠습니까?`, async () => {
         try {
             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userId), { bizStatus: 'none', bizNum: '' });
-            showToast("사업자 거절 완료!");
-        } catch(e) { showToast("거절 처리 실패"); }
+            showToast("거절 완료!");
+        } catch(e) { showToast("거절 실패"); }
     });
   };
 
-  const openPhotoSheet = (index, type) => { 
-    setCurrentPhotoTarget({ index, type }); 
-    setIsPhotoSheetOpen(true); 
-  };
-  
+  const openPhotoSheet = (index, type) => { setCurrentPhotoTarget({ index, type }); setIsPhotoSheetOpen(true); };
   const triggerPhotoInput = (type) => { 
     setIsPhotoSheetOpen(false); 
-    if (type === 'camera') {
-      cameraInputRef.current.click(); 
-    } else {
-      galleryInputRef.current.click();
-    }
+    if (type === 'camera') cameraInputRef.current.click(); else galleryInputRef.current.click();
   };
   
   const handleFileSelect = (e) => {
     const file = e.target.files[0];
-  
-  if (file) {
-    // 💡 10MB 이상 파일 업로드 차단 로직 추가
-    const maxSize = 10 * 1024 * 1024; // 10MB
-    if (file.size > maxSize) {
-      alert("이미지 용량이 너무 큽니다. 10MB 이하의 사진만 업로드 가능합니다.");
-      e.target.value = ''; // 선택 초기화
-      return;
+    if (file) {
+      if (file.size > 10 * 1024 * 1024) {
+        alert("이미지 용량이 너무 큽니다. 10MB 이하의 사진만 업로드 가능합니다.");
+        e.target.value = ''; return;
+      }
+      if (currentPhotoTarget) {
+        resizeAndCompressImage(file, (compressedStr) => {
+          const newSpaces = [...spaces];
+          if (currentPhotoTarget.type === 'before') newSpaces[currentPhotoTarget.index].beforeImg = compressedStr;
+          else newSpaces[currentPhotoTarget.index].afterImg = compressedStr;
+          setSpaces(newSpaces);
+        }, 1000); 
+      }
     }
-
-    // 기존 리사이징 로직 실행
-    if (currentPhotoTarget) {
-      resizeAndCompressImage(file, (compressedStr) => {
-        const newSpaces = [...spaces];
-        if (currentPhotoTarget.type === 'before') {
-          newSpaces[currentPhotoTarget.index].beforeImg = compressedStr;
-        } else {
-          newSpaces[currentPhotoTarget.index].afterImg = compressedStr;
-        }
-        setSpaces(newSpaces);
-      }, 1000); 
-    }
-  }
-  e.target.value = ''; 
-};
+    e.target.value = ''; 
+  };
   
-
   const handleSpaceDescChange = (index, type, value) => {
     const newSpaces = [...spaces];
     if(type === 'desc') newSpaces[index].desc = value;
@@ -829,22 +728,15 @@ export default function App() {
     setSpaces(newSpaces);
   };
 
-  const addSpace = () => {
-    setSpaces([...spaces, { id: Date.now(), spaceName: '', beforeImg: '', afterImg: '', desc: '' }]);
-  };
-  
-  const removeSpace = (index) => { 
-    const newSpaces = [...spaces]; 
-    newSpaces.splice(index, 1); 
-    setSpaces(newSpaces); 
-  };
+  const addSpace = () => setSpaces([...spaces, { id: Date.now(), spaceName: '', beforeImg: '', afterImg: '', desc: '' }]);
+  const removeSpace = (index) => { const newSpaces = [...spaces]; newSpaces.splice(index, 1); setSpaces(newSpaces); };
 
   const saveAndShareReport = async () => {
     if (!taskTitle || !taskDate) return showToast("작업 일자와 제목을 입력해주세요!");
-    if (spaces.some(sp => !sp.beforeImg || !sp.afterImg)) return showToast("모든 공간의 Before/After 사진을 첨부해주세요!");
+    if (spaces.some(sp => !sp.beforeImg || !sp.afterImg)) return showToast("모든 공간의 사진을 첨부해주세요!");
 
     setIsUploading(true); 
-    showToast("클라우드에 안전하게 저장 중...");
+    showToast("저장 중...");
     
     try {
       const timeStamp = Date.now();
@@ -852,383 +744,202 @@ export default function App() {
       const reportNo = String(snap.size + 1).padStart(6, '0');
       
       const uploadedSpaces = await Promise.all(spaces.map(async (sp, idx) => {
-          let bUrl = sp.beforeImg; 
-          let aUrl = sp.afterImg;
-          
+          let bUrl = sp.beforeImg; let aUrl = sp.afterImg;
           if(bUrl.startsWith('data:')) {
             const bRef = ref(storage, `reports/${currentUser.id}/${timeStamp}_${idx}_before.jpg`);
-            await uploadString(bRef, bUrl, 'data_url'); 
-            bUrl = await getDownloadURL(bRef);
+            await uploadString(bRef, bUrl, 'data_url'); bUrl = await getDownloadURL(bRef);
           }
           if(aUrl.startsWith('data:')) {
             const aRef = ref(storage, `reports/${currentUser.id}/${timeStamp}_${idx}_after.jpg`);
-            await uploadString(aRef, aUrl, 'data_url'); 
-            aUrl = await getDownloadURL(aRef);
+            await uploadString(aRef, aUrl, 'data_url'); aUrl = await getDownloadURL(aRef);
           }
           return { ...sp, beforeImg: bUrl, afterImg: aUrl };
       }));
       
       const docRef = await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'reports'), {
-        reportNo: reportNo,
-        authorId: currentUser.id, 
-        authorName: currentUser.name || '작업자', 
-        authorCompany: currentUser.company || '',
-        authorPic: currentUser.profilePic || '', 
-        title: taskTitle, 
-        taskDate: taskDate, 
-        category: taskCategory,
-        spaces: uploadedSpaces, 
-        status: isPrivateUpload ? 'private' : 'public', 
-        history: [], 
-        comments: [], 
-        likes: [],
-        location: shareLocation ? currentLocation : '', 
-        createdAt: serverTimestamp()
+        reportNo: reportNo, authorId: currentUser.id, authorName: currentUser.name || '작업자', 
+        authorCompany: currentUser.company || '', authorPic: currentUser.profilePic || '', 
+        title: taskTitle, taskDate: taskDate, category: taskCategory, spaces: uploadedSpaces, 
+        status: isPrivateUpload ? 'private' : 'public', history: [], comments: [], likes: [],
+        location: shareLocation ? currentLocation : '', createdAt: serverTimestamp()
       });
       
-      // 💡 [EmailJS] 새로운 리포트 등록 시 알림 메일 전송
-      sendEmailNotification(
-          `[비포터] 🚀 새로운 작업 리포트가 등록되었습니다!`,
-          `작성자: ${currentUser.name}\n작업 제목: ${taskTitle}\n작업 일자: ${taskDate}\n카테고리: ${taskCategory}\n\n새로운 리포트가 성공적으로 업로드되었습니다.\n\n리포트 바로가기: https://www.beforeter.com/report/${docRef.id}`
-      );
-
-      setLatestReportId(docRef.id); 
-      setIsFinishModalOpen(true);
+      sendEmailNotification(`[비포터] 🚀 새 리포트 등록`, `작성자: ${currentUser.name}\n작업 제목: ${taskTitle}\n링크: https://www.beforeter.com/report/${docRef.id}`);
+      setLatestReportId(docRef.id); setIsFinishModalOpen(true);
     } catch (error) { 
-      showToast("업로드 오류가 발생했습니다."); 
-      console.error(error);
-    } finally { 
-      setIsUploading(false); 
-    }
+      showToast("업로드 오류가 발생했습니다."); console.error(error);
+    } finally { setIsUploading(false); }
   };
 
   const openDetailView = async (reportId, isInitial = false) => {
-    setCurrentView('detail'); 
-    setIsDetailLoading(true); 
-    setDetailViewMode('horizontal'); 
-    setFlippedCards({});
-    
-    // 리포트를 열 때 스크롤을 항상 가장 위로 올려줍니다.
+    setCurrentView('detail'); setIsDetailLoading(true); setDetailViewMode('horizontal'); setFlippedCards({});
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    
     try {
       const docSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', reportId));
       if (docSnap.exists()) {
         const data = { id: docSnap.id, ...docSnap.data() };
-        setDetailReport(data);
-        updateMetaTags(data);
+        setDetailReport(data); updateMetaTags(data);
         if(!isInitial) window.history.pushState({}, '', '/report/' + reportId);
-      } else { 
-        showToast("존재하지 않는 리포트입니다."); 
-        switchView('feed'); 
-      }
-    } catch (err) { 
-      showToast("오류가 발생했습니다."); 
-      switchView('feed'); 
-    } finally { 
-      setIsDetailLoading(false); 
-    }
+      } else { showToast("존재하지 않는 리포트입니다."); switchView('feed'); }
+    } catch (err) { showToast("오류가 발생했습니다."); switchView('feed'); } finally { setIsDetailLoading(false); }
   };
 
-  const openReportEdit = () => {
-    setEditDocTitle(detailReport.title); 
-    setEditDocStatus(detailReport.status || 'public');
-    setIsEditModalOpen(true);
-  };
-
+  const openReportEdit = () => { setEditDocTitle(detailReport.title); setEditDocStatus(detailReport.status || 'public'); setIsEditModalOpen(true); };
   const submitReportEdit = async () => {
-    setIsEditModalOpen(false); 
-    showToast("저장 중...");
+    setIsEditModalOpen(false); showToast("저장 중...");
     try {
       const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', detailReport.id);
-      const newHistoryLog = { 
-        date: new Date().toLocaleDateString('ko-KR') + ' ' + new Date().toLocaleTimeString('ko-KR', {hour12:false, hour:'2-digit', minute:'2-digit'}), 
-        action: '제목 또는 상태 변경' 
-      };
-      await updateDoc(docRef, {
-        title: editDocTitle, 
-        status: editDocStatus,
-        history: [...(detailReport.history || []), newHistoryLog]
-      });
+      const newHistoryLog = { date: new Date().toLocaleDateString('ko-KR') + ' ' + new Date().toLocaleTimeString('ko-KR', {hour12:false, hour:'2-digit', minute:'2-digit'}), action: '제목/상태 변경' };
+      await updateDoc(docRef, { title: editDocTitle, status: editDocStatus, history: [...(detailReport.history || []), newHistoryLog] });
       showToast("수정되었습니다.");
-    } catch (e) { 
-      showToast("수정에 실패했습니다."); 
-    }
+    } catch (e) { showToast("수정 실패"); }
   };
 
   const deleteReport = async () => {
     triggerConfirm("정말 이 리포트를 삭제하시겠습니까? 복구할 수 없습니다.", async () => {
       setIsEditModalOpen(false);
-      try {
-        await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', detailReport.id));
-        showToast("삭제되었습니다."); 
-        switchView('feed');
-      } catch(e) { 
-        showToast("삭제에 실패했습니다."); 
-      }
+      try { await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', detailReport.id)); showToast("삭제 완료"); switchView('feed'); } 
+      catch(e) { showToast("삭제 실패"); }
     });
   };
 
   const copyLink = (id) => {
-    const textarea = document.createElement('textarea'); 
-    textarea.value = `https://www.beforeter.com/report/${id}`;
-    document.body.appendChild(textarea); 
-    textarea.select();
-    try { 
-      document.execCommand('copy'); 
-      showToast("주소가 복사되었습니다! 카톡에 붙여넣기 하세요."); 
-    } catch (err) { 
-      showToast("복사 실패"); 
-    } finally { 
-      document.body.removeChild(textarea); 
-    }
+    const textarea = document.createElement('textarea'); textarea.value = `https://www.beforeter.com/report/${id}`;
+    document.body.appendChild(textarea); textarea.select();
+    try { document.execCommand('copy'); showToast("주소가 복사되었습니다!"); } 
+    catch (err) { showToast("복사 실패"); } finally { document.body.removeChild(textarea); }
   };
   
   const copyProfileLink = (id) => {
-    const textarea = document.createElement('textarea'); 
-    textarea.value = `https://www.beforeter.com/profile/${id}`;
-    document.body.appendChild(textarea); 
-    textarea.select();
-    try { 
-      document.execCommand('copy'); 
-      showToast("오픈 프로필 주소가 복사되었습니다!"); 
-    } catch (err) { 
-      showToast("복사 실패"); 
-    } finally { 
-      document.body.removeChild(textarea); 
-    }
+    const textarea = document.createElement('textarea'); textarea.value = `https://www.beforeter.com/profile/${id}`;
+    document.body.appendChild(textarea); textarea.select();
+    try { document.execCommand('copy'); showToast("프로필 주소가 복사되었습니다!"); } 
+    catch (err) { showToast("복사 실패"); } finally { document.body.removeChild(textarea); }
   };
 
-  // 💡 알림톡 전송 함수
   const sendAlimtalk = async () => {
-    if(alimtalkPhone.length < 10) {
-        return showToast("올바른 연락처를 입력해주세요.");
-    }
+    if(alimtalkPhone.length < 10) return showToast("올바른 연락처를 입력해주세요.");
     
-    setIsAlimtalkSending(true);
+    setIsAlimtalkSending(true); 
     showToast(`${alimtalkPhone} 번호로 알림톡 전송을 요청합니다...`);
 
     try {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        showToast(`알림톡 전송 요청이 성공적으로 서버에 전달되었습니다. 🚀`);
-        setIsAlimtalkModalOpen(false);
-        setAlimtalkPhone('');
-    } catch (error) {
-        console.error("알림톡 전송 에러:", error);
-        showToast("알림톡 전송 중 오류가 발생했습니다. 나중에 다시 시도해주세요.");
-    } finally {
-        setIsAlimtalkSending(false);
+        const response = await fetch('/api/alimtalk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                phone: alimtalkPhone,
+                reportTitle: detailReport.title,
+                reportUrl: `https://www.beforeter.com/report/${detailReport.id}`
+            })
+        });
+
+        if (response.ok) {
+            showToast(`알림톡이 성공적으로 전송되었습니다! 🚀`);
+            setIsAlimtalkModalOpen(false); 
+            setAlimtalkPhone('');
+        } else {
+            throw new Error('API 전송 실패');
+        }
+    } catch (error) { 
+        console.error(error);
+        showToast("알림톡 전송 중 오류가 발생했습니다. (서버 연결 필요)"); 
+    } finally { 
+        setIsAlimtalkSending(false); 
     }
   };
 
   const submitComment = async () => {
     if (!commentInput.trim()) return;
     if (!currentUser) return showToast("로그인 후 이용 가능합니다.");
-    
-    const newComment = { 
-      id: crypto.randomUUID(), 
-      authorId: currentUser.id, 
-      authorName: currentUser.name, 
-      authorPic: currentUser.profilePic, 
-      text: commentInput.trim(), 
-      createdAt: Date.now() 
-    };
-    
+    const newComment = { id: crypto.randomUUID(), authorId: currentUser.id, authorName: currentUser.name, authorPic: currentUser.profilePic, text: commentInput.trim(), createdAt: Date.now() };
     try {
         const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', detailReport.id);
         const updatedComments = [...(detailReport.comments || []), newComment];
         await updateDoc(docRef, { comments: updatedComments });
-        
-        setDetailReport(prev => ({ ...prev, comments: updatedComments })); 
-        setCommentInput('');
-        showToast("댓글이 등록되었습니다.");
-        
+        setDetailReport(prev => ({ ...prev, comments: updatedComments })); setCommentInput(''); showToast("댓글이 등록되었습니다.");
         if(detailReport.authorId !== currentUser.id) {
-            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'notifications'), {
-                targetUserId: detailReport.authorId, 
-                type: 'comment', 
-                fromName: currentUser.name, 
-                reportId: detailReport.id, 
-                isRead: false, 
-                createdAt: serverTimestamp()
-            });
+            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'notifications'), { targetUserId: detailReport.authorId, type: 'comment', fromName: currentUser.name, reportId: detailReport.id, isRead: false, createdAt: serverTimestamp() });
         }
-    } catch(e) { 
-      showToast("댓글 등록에 실패했습니다."); 
-    }
+    } catch(e) { showToast("댓글 등록 실패"); }
   };
 
   const handleToggleLike = async (report, e) => {
     if (e) e.stopPropagation(); 
     if (!currentUser) return showToast("로그인 후 이용 가능합니다.");
-    
     const isLiked = report.likes?.includes(currentUser.id);
     let newLikes = report.likes || [];
-    
-    if (isLiked) {
-      newLikes = newLikes.filter(id => id !== currentUser.id);
-    } else {
-      newLikes.push(currentUser.id);
-    }
-    
+    if (isLiked) newLikes = newLikes.filter(id => id !== currentUser.id); else newLikes.push(currentUser.id);
     try {
         const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', report.id);
         await updateDoc(docRef, { likes: newLikes });
-        
-        if (detailReport && detailReport.id === report.id) {
-           setDetailReport(prev => ({ ...prev, likes: newLikes }));
-        }
-
+        if (detailReport && detailReport.id === report.id) setDetailReport(prev => ({ ...prev, likes: newLikes }));
         if(!isLiked && report.authorId !== currentUser.id) {
-            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'notifications'), {
-                targetUserId: report.authorId, 
-                type: 'like', 
-                fromName: currentUser.name, 
-                reportId: report.id, 
-                isRead: false, 
-                createdAt: serverTimestamp()
-            });
+            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'notifications'), { targetUserId: report.authorId, type: 'like', fromName: currentUser.name, reportId: report.id, isRead: false, createdAt: serverTimestamp() });
         }
-    } catch(err) { 
-      showToast("요청 처리에 실패했습니다."); 
-    }
+    } catch(err) { showToast("요청 실패"); }
   };
 
   const submitFeedback = async () => { 
     if (!feedbackText.trim()) return showToast("내용을 입력해주세요."); 
     try {
-      const fbData = {
-        userId: currentUser?.id || 'anonymous', 
-        email: currentUser?.email || '비로그인',
-        category: feedbackCategory, 
-        text: feedbackText, 
-        createdAt: serverTimestamp()
-      };
-      
-      // DB 저장
+      const fbData = { userId: currentUser?.id || 'anonymous', email: currentUser?.email || '비로그인', category: feedbackCategory, text: feedbackText, createdAt: serverTimestamp() };
       await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'feedbacks'), fbData);
-
-      // 💡 [EmailJS] 피드백 이메일 전송
-      sendEmailNotification(
-          `[비포터] 💡 새로운 피드백 접수: ${feedbackCategory}`,
-          `작성자: ${currentUser?.name || '익명'}\n이메일: ${fbData.email}\n카테고리: ${feedbackCategory}\n\n내용:\n${feedbackText}`
-      );
-
-      showToast("소중한 의견 감사합니다! 적극 검토하겠습니다. ❤️"); 
-      setIsFeedbackModalOpen(false); 
-      setFeedbackText(''); 
-      setFeedbackCategory('기능 관련');
-    } catch(e) { 
-      console.error("피드백 전송 에러:", e);
-      showToast("오류가 발생했습니다. 네트워크를 확인해주세요."); 
-    }
+      sendEmailNotification(`[비포터] 💡 피드백 접수`, `내용:\n${feedbackText}`);
+      showToast("소중한 의견 감사합니다!"); setIsFeedbackModalOpen(false); setFeedbackText(''); setFeedbackCategory('기능 관련');
+    } catch(e) { showToast("오류 발생"); }
   };
 
-  const handleOpenNoti = () => {
-    setIsNotiModalOpen(true);
-  };
-
+  const handleOpenNoti = () => setIsNotiModalOpen(true);
   const markAllNotisAsRead = async () => {
-    if (appUpdateNoti && !appUpdateNoti.isRead) {
-        localStorage.setItem('beporter_version', APP_VERSION);
-        setAppUpdateNoti(prev => ({ ...prev, isRead: true }));
-    }
-
-    notifications.forEach(async (noti) => {
-      if(!noti.isRead) {
-        try {
-          await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'notifications', noti.id), { isRead: true });
-        } catch (e) { console.error(e); }
-      }
-    });
-
-    showToast("모두 읽음 처리되었습니다.");
+    if (appUpdateNoti && !appUpdateNoti.isRead) { localStorage.setItem('beporter_version', APP_VERSION); setAppUpdateNoti(prev => ({ ...prev, isRead: true })); }
+    notifications.forEach(async (noti) => { if(!noti.isRead) { try { await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'notifications', noti.id), { isRead: true }); } catch (e) {} } });
+    showToast("모두 읽음 처리 완료");
   };
 
   const blockUser = () => {
     if(!postOptionsMenu) return;
-    triggerConfirm("이 작업자의 모든 게시물을 차단하시겠습니까?", () => {
+    triggerConfirm("이 작업자의 게시물을 차단하시겠습니까?", () => {
       const newBlocked = [...blockedUsers, postOptionsMenu.authorId];
-      setBlockedUsers(newBlocked);
-      localStorage.setItem('beporter_blocked', JSON.stringify(newBlocked));
-      showToast("해당 사용자의 게시물이 차단되었습니다.");
-      setPostOptionsMenu(null);
-      if(currentView === 'detail') switchView('feed');
+      setBlockedUsers(newBlocked); localStorage.setItem('beporter_blocked', JSON.stringify(newBlocked));
+      showToast("해당 사용자가 차단되었습니다."); setPostOptionsMenu(null); if(currentView === 'detail') switchView('feed');
     });
   };
 
   const submitReportPost = async () => {
     if(!reportReason.trim()) return showToast("신고 사유를 입력해주세요.");
     try {
-      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'reports_flagged'), {
-        reporterId: currentUser.id, 
-        reportId: postOptionsMenu.reportId, 
-        reason: reportReason, 
-        createdAt: serverTimestamp()
-      });
-
-      sendEmailNotification(
-        `[비포터] 🚨 새로운 게시물 신고 접수`,
-        `신고자 ID: ${currentUser.id}\n신고자 이름: ${currentUser.name}\n신고된 게시물 ID: ${postOptionsMenu.reportId}\n\n신고 사유:\n${reportReason}`
-      );
-
-      showToast("신고가 접수되었습니다. 관리자 검토 후 조치됩니다.");
-      setIsReportPostModalOpen(false); 
-      setReportReason(''); 
-      setPostOptionsMenu(null);
-    } catch(e) { 
-      console.error(e);
-      showToast("신고 접수에 실패했습니다. 네트워크를 확인해주세요."); 
-    }
+      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'reports_flagged'), { reporterId: currentUser.id, reportId: postOptionsMenu.reportId, reason: reportReason, createdAt: serverTimestamp() });
+      showToast("신고 접수 완료."); setIsReportPostModalOpen(false); setReportReason(''); setPostOptionsMenu(null);
+    } catch(e) { showToast("신고 실패"); }
   };
 
   const showPublicProfile = async (authorId, forceOpen = false) => {
-    if(currentUser && currentUser.id === authorId && !forceOpen) { 
-      switchView('mypage'); 
-      return; 
-    }
-    
+    if(currentUser && currentUser.id === authorId && !forceOpen) { switchView('mypage'); return; }
     setIsDetailLoading(true);
     try {
       const userSnap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', authorId));
-      if(userSnap.exists()) { 
-        setPublicProfileUser(userSnap.data()); 
-      } else { 
-        setPublicProfileUser({ id: authorId, name: '작업자', intro: '아직 자기소개를 등록하지 않았습니다.', keywords: [], profilePic: '' }); 
-      }
+      if(userSnap.exists()) setPublicProfileUser(userSnap.data()); else setPublicProfileUser({ id: authorId, name: '작업자', intro: '소개가 없습니다.', keywords: [], profilePic: '' }); 
       setCurrentView('public-profile');
       if(!forceOpen) window.history.pushState({}, '', '/profile/' + authorId);
-    } catch(e) { 
-      showToast("프로필을 불러오지 못했습니다."); 
-    } finally {
-      setIsDetailLoading(false);
-    }
+    } catch(e) { showToast("프로필을 불러오지 못했습니다."); } finally { setIsDetailLoading(false); }
   };
 
   const formatDisplayTime = (item) => {
-    let displayStr = item.taskDate ? item.taskDate.replace(/-/g, '/') : "날짜 미상";
+    let displayStr = item.taskDate ? item.taskDate.replace(/-/g, '.') : "날짜 미상";
     if (item.location) displayStr += ` • ${item.location}`;
     return displayStr;
   };
   
-  const toggleFlip = (idx) => {
-    setFlippedCards(prev => ({ ...prev, [idx]: !prev[idx] }));
-  };
+  const toggleFlip = (idx) => setFlippedCards(prev => ({ ...prev, [idx]: !prev[idx] }));
 
-  // 피드 필터 및 파생 데이터 처리
   const publicFeeds = feedData.filter(f => f.status === 'public' && !blockedUsers.includes(f.authorId));
-  const displayedFeeds = feedFilter === '전체' 
-    ? publicFeeds 
-    : publicFeeds.filter(f => (f.category || '기타') === feedFilter);
-    
+  const displayedFeeds = feedFilter === '전체' ? publicFeeds : publicFeeds.filter(f => (f.category || '기타') === feedFilter);
   const myFeeds = currentUser ? feedData.filter(f => f.authorId === currentUser.id) : [];
   const publicProfileFeeds = publicProfileUser ? publicFeeds.filter(f => f.authorId === publicProfileUser.id) : [];
-  
-  // 전체 읽지 않은 알림 개수 계산 (유저 개인 알림 + 시스템 업데이트 알림)
   const unreadNotis = notifications.filter(n => !n.isRead).length + (appUpdateNoti && !appUpdateNoti.isRead ? 1 : 0);
 
-  // 💡 [추가됨] 회원가입 폼 유효성 검사
-  const isSignupValid = authName.trim() && authPhone.trim() && authEmail.trim() && authPassword.length >= 6 && termsAgreed && privacyAgreed;
+  const isSignupValid = authName.trim() && authEmail.trim() && authPassword.length >= 6 && termsAgreed && privacyAgreed;
   const isLoginValid = authEmail.trim() && authPassword.trim();
 
   const renderFooter = () => (
@@ -1252,758 +963,122 @@ export default function App() {
     <div className="app-wrapper">
       <style>{`
         /* 글로벌 설정 및 초기화 */
-        html { 
-            overflow-y: scroll; 
-        }
+        html { overflow-y: scroll; }
         body { 
             font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; 
-            background-color: #f3f4f6; 
-            margin: 0; 
-            padding: 0; 
-            color: #111827; 
-            -webkit-tap-highlight-color: transparent; 
-            overflow-x: hidden; 
+            background-color: #f3f4f6; margin: 0; padding: 0; color: #111827; 
+            -webkit-tap-highlight-color: transparent; overflow-x: hidden; 
         }
         
-        /* 💡 [디자인 수정] Black & White 모노톤 적용 및 Flat Design 설정 */
+        /* 디자인 토큰 개편: Black & White 모노톤 */
         :root { 
-            --primary: #000000; 
-            --primary-hover: #333333; 
-            --primary-light: #f9fafb; 
-            --card-bg: #ffffff; 
-            --text-main: #111827; 
-            --text-sub: #6b7280; 
-            --danger: #dc2626;
-            --kakao: #FEE500;
-            --kakao-text: #000000;
-            --border: #e5e7eb;
+            --primary: #000000; --primary-hover: #333333; --primary-light: #f9fafb; 
+            --card-bg: #ffffff; --text-main: #111827; --text-sub: #6b7280; 
+            --danger: #dc2626; --kakao: #FEE500; --kakao-text: #000000; --border: #e5e7eb;
         }
         
-        /* 레이아웃 컨테이너 */
-        .app-wrapper { 
-            max-width: 480px; 
-            margin: 0 auto; 
-            min-height: 100vh; 
-            background-color: #ffffff; 
-            position: relative; 
-            display: flex; 
-            flex-direction: column;
-        }
+        .app-wrapper { max-width: 480px; margin: 0 auto; min-height: 100vh; background-color: #ffffff; position: relative; display: flex; flex-direction: column; }
         
-        /* 헤더 스타일링 */
         .app-header { 
-            position: sticky; 
-            top: 0; 
-            left: 0; 
-            width: 100%; 
-            height: 56px; 
-            background-color: var(--card-bg); 
-            display: flex; 
-            align-items: center; 
-            justify-content: space-between; 
-            padding: 0 16px; 
-            z-index: 50; 
-            border-bottom: 1px solid var(--border); 
-            box-sizing: border-box;
+            position: sticky; top: 0; left: 0; width: 100%; height: 56px; background-color: var(--card-bg); 
+            display: flex; align-items: center; justify-content: space-between; padding: 0 16px; 
+            z-index: 50; border-bottom: 1px solid var(--border); box-sizing: border-box;
         }
         
-        .header-icon { 
-            background: none; 
-            border: none; 
-            color: var(--text-main); 
-            font-size: 24px; 
-            cursor: pointer; 
-            padding: 8px; 
-            position: relative; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center;
-            border-radius: 4px;
-            transition: background-color 0.2s;
-        }
+        .header-icon { background: none; border: none; color: var(--text-main); font-size: 24px; cursor: pointer; padding: 8px; display: flex; align-items: center; justify-content: center; border-radius: 4px; transition: 0.2s; }
+        .header-icon:active { background-color: var(--primary-light); }
+        .header-title { font-size: 18px; font-weight: 900; color: var(--primary); letter-spacing: -0.5px; cursor: pointer; }
         
-        .header-icon:active {
-            background-color: var(--primary-light);
-        }
+        .view-section { padding-bottom: 100px; flex: 1; box-sizing: border-box; background: #ffffff; display: flex; flex-direction: column; }
         
-        .header-title { 
-            font-size: 18px; 
-            font-weight: 900; 
-            color: var(--primary); 
-            letter-spacing: -0.5px; 
-            cursor: pointer; 
-        }
+        .brand-hook-card { background: var(--primary); color: white; padding: 20px; border-radius: 8px; margin-bottom: 16px; text-align: left; min-height: 94px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; border: 1px solid var(--primary); }
+        .brand-hook-card h3 { margin: 0 0 6px 0; font-size: 18px; font-weight: 800; }
+        .brand-hook-card p { margin: 0; font-size: 13px; opacity: 0.9; line-height: 1.4; }
         
-        .view-section { 
-            padding-bottom: 100px; 
-            flex: 1; 
-            box-sizing: border-box; 
-            background: #ffffff; 
-            display: flex;
-            flex-direction: column;
-        }
-        
-        /* 컴포넌트: 브랜드 훅 카드 (배너) */
-        .brand-hook-card { 
-            background: var(--primary); 
-            color: white; 
-            padding: 20px; 
-            border-radius: 8px; 
-            margin-bottom: 16px; 
-            text-align: left; 
-            min-height: 94px; 
-            box-sizing: border-box; 
-            display: flex; 
-            flex-direction: column; 
-            justify-content: center;
-            border: 1px solid var(--primary);
-        }
-        
-        @keyframes fadeSlide { 
-            from { opacity: 0; transform: translateX(20px); } 
-            to { opacity: 1; transform: translateX(0); } 
-        }
-        
-        .brand-hook-card h3 { 
-            margin: 0 0 6px 0; 
-            font-size: 18px; 
-            font-weight: 800; 
-        }
-        
-        .brand-hook-card p { 
-            margin: 0; 
-            font-size: 13px; 
-            opacity: 0.9; 
-            line-height: 1.4; 
-        }
-        
-        /* 컴포넌트: 필터 칩 스크롤 영역 */
-        .filter-scroll { 
-            display: flex; 
-            gap: 8px; 
-            overflow-x: auto; 
-            padding: 0 20px 16px 20px; 
-            margin: 0; 
-            scrollbar-width: none; 
-        }
-        
-        .filter-scroll::-webkit-scrollbar { 
-            display: none; 
-        }
-        
-        .filter-chip { 
-            padding: 8px 16px; 
-            border-radius: 4px; 
-            font-size: 13px; 
-            font-weight: 700; 
-            background: var(--card-bg); 
-            color: var(--text-sub); 
-            border: 1px solid var(--border); 
-            white-space: nowrap; 
-            cursor: pointer; 
-            transition: 0.2s; 
-        }
-        
-        .filter-chip.active { 
-            background: var(--primary); 
-            color: white; 
-            border-color: var(--primary); 
-        }
+        .filter-scroll { display: flex; gap: 8px; overflow-x: auto; padding: 0 20px 16px 20px; margin: 0; scrollbar-width: none; }
+        .filter-scroll::-webkit-scrollbar { display: none; }
+        .filter-chip { padding: 8px 16px; border-radius: 4px; font-size: 13px; font-weight: 700; background: var(--card-bg); color: var(--text-sub); border: 1px solid var(--border); white-space: nowrap; cursor: pointer; transition: 0.2s; }
+        .filter-chip.active { background: var(--primary); color: white; border-color: var(--primary); }
 
-        /* 레이아웃: 사이드바 */
-        .sidebar-overlay { 
-            position: fixed; 
-            top: 0; 
-            left: 0; 
-            width: 100%; 
-            height: 100%; 
-            background: rgba(0,0,0,0.5); 
-            z-index: 100; 
-            opacity: 0; 
-            visibility: hidden; 
-            transition: all 0.3s; 
-        }
+        .sidebar-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100; opacity: 0; visibility: hidden; transition: all 0.3s; }
+        .sidebar-overlay.active { opacity: 1; visibility: visible; }
+        .sidebar { position: fixed; top: 0; left: -280px; width: 280px; height: 100%; background: white; z-index: 101; transition: all 0.3s; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+        .sidebar.active { left: 0; }
         
-        .sidebar-overlay.active { 
-            opacity: 1; 
-            visibility: visible; 
-        }
+        .feed-container { padding: 16px; flex: 1; }
+        .feed-card { background: var(--card-bg); border-radius: 8px; padding: 16px; margin-bottom: 20px; border: 1px solid var(--border); cursor: pointer; position: relative; }
+        .feed-author { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+        .author-avatar { width: 36px; height: 36px; background-color: var(--primary-light); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--text-main); font-weight: bold; font-size: 14px; overflow: hidden; cursor: pointer; border: 1px solid var(--border); }
+        .author-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .feed-title { font-size: 16px; font-weight: 800; margin-bottom: 12px; line-height: 1.4; }
+        .feed-images { display: flex; gap: 8px; height: 160px; }
+        .feed-img-wrap { flex: 1; position: relative; border-radius: 4px; overflow: hidden; background-color: var(--primary-light); border: 1px solid var(--border); }
+        .feed-img-wrap img { width: 100%; height: 100%; object-fit: cover; }
         
-        .sidebar { 
-            position: fixed; 
-            top: 0; 
-            left: -280px; 
-            width: 280px; 
-            height: 100%; 
-            background: white; 
-            z-index: 101; 
-            transition: all 0.3s; 
-            display: flex; 
-            flex-direction: column; 
-            border-right: 1px solid var(--border);
-        }
+        .badge { position: absolute; top: 8px; left: 8px; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 800; color: white; background: rgba(0,0,0,0.8); z-index: 10;}
+        .biz-badge { background: var(--text-main); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; margin-left: 6px; vertical-align: middle; }
+        .biz-badge.pending { background: var(--primary-light); color: var(--text-sub); border: 1px solid var(--border); }
+        .more-opts-btn { position: absolute; top: 16px; right: 16px; background: none; border: none; font-size: 18px; color: var(--text-sub); cursor: pointer; }
         
-        .sidebar.active { 
-            left: 0; 
-        }
+        .detail-card { background: var(--card-bg); border-radius: 8px; padding: 20px; margin-bottom: 20px; border: 1px solid var(--border); }
+        .unified-desc { font-size: 14px; color: var(--text-main); background: var(--primary-light); padding: 16px; border-radius: 4px; margin-top: 12px; line-height: 1.5; border: 1px solid var(--border); }
         
-        /* 컴포넌트: 피드 카드 */
-        .feed-container { 
-            padding: 16px; 
-            flex: 1;
-        }
+        .view-mode-control { display: flex; background: var(--primary-light); padding: 4px; border-radius: 4px; margin-bottom: 20px; gap: 4px; border: 1px solid var(--border); }
+        .view-mode-btn { flex: 1; padding: 10px; text-align: center; font-size: 13px; font-weight: 700; border-radius: 4px; cursor: pointer; color: var(--text-sub); transition: 0.2s; }
+        .view-mode-btn.active { background: white; color: var(--text-main); border: 1px solid var(--border); }
         
-        .feed-card { 
-            background: var(--card-bg); 
-            border-radius: 8px; 
-            padding: 16px; 
-            margin-bottom: 20px; 
-            border: 1px solid var(--border); 
-            cursor: pointer; 
-            position: relative; 
-        }
-        
-        .feed-author { 
-            display: flex; 
-            align-items: center; 
-            gap: 10px; 
-            margin-bottom: 12px; 
-        }
-        
-        .author-avatar { 
-            width: 36px; 
-            height: 36px; 
-            background-color: var(--primary-light); 
-            border-radius: 50%; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            color: var(--text-main); 
-            font-weight: bold; 
-            font-size: 14px; 
-            overflow: hidden; 
-            cursor: pointer;
-            border: 1px solid var(--border);
-        }
-        
-        .author-avatar img { 
-            width: 100%; 
-            height: 100%; 
-            object-fit: cover; 
-        }
-        
-        .feed-title { 
-            font-size: 16px; 
-            font-weight: 800; 
-            margin-bottom: 12px; 
-            line-height: 1.4; 
-        }
-        
-        .feed-images { 
-            display: flex; 
-            gap: 8px; 
-            height: 160px; 
-        }
-        
-        .feed-img-wrap { 
-            flex: 1; 
-            position: relative; 
-            border-radius: 4px; 
-            overflow: hidden; 
-            background-color: var(--primary-light); 
-            border: 1px solid var(--border);
-        }
-        
-        .feed-img-wrap img { 
-            width: 100%; 
-            height: 100%; 
-            object-fit: cover; 
-        }
-        
-        .badge { 
-            position: absolute; 
-            top: 8px; 
-            left: 8px; 
-            padding: 4px 8px; 
-            border-radius: 4px; 
-            font-size: 11px; 
-            font-weight: 800; 
-            color: white; 
-            background: rgba(0,0,0,0.8); 
-        }
-        
-        .biz-badge {
-            background: var(--text-main);
-            color: white;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: bold;
-            margin-left: 6px;
-            vertical-align: middle;
-        }
-        
-        .biz-badge.pending {
-            background: var(--primary-light);
-            color: var(--text-sub);
-            border: 1px solid var(--border);
-        }
+        .flip-card { perspective: 1000px; width: 100%; height: 260px; cursor: pointer; border-radius: 4px; }
+        .flip-card-inner { position: relative; width: 100%; height: 100%; transition: transform 0.6s; transform-style: preserve-3d; }
+        .flip-card.flipped .flip-card-inner { transform: rotateY(180deg); }
+        .flip-card-front, .flip-card-back { position: absolute; width: 100%; height: 100%; backface-visibility: hidden; border-radius: 4px; overflow: hidden; background-color: var(--primary-light); border: 1px solid var(--border); }
+        .flip-card-back { transform: rotateY(180deg); }
+        .noti-badge { position: absolute; top: 4px; right: 4px; background: var(--danger); color: white; font-size: 10px; font-weight: bold; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
 
-        .more-opts-btn { 
-            position: absolute; 
-            top: 16px; 
-            right: 16px; 
-            background: none; 
-            border: none; 
-            font-size: 18px; 
-            color: var(--text-sub); 
-            cursor: pointer; 
-        }
-        
-        /* 컴포넌트: 디테일 뷰 */
-        .detail-card { 
-            background: var(--card-bg); 
-            border-radius: 8px; 
-            padding: 20px; 
-            margin-bottom: 20px; 
-            border: 1px solid var(--border); 
-        }
-        
-        .unified-desc { 
-            font-size: 14px; 
-            color: var(--text-main); 
-            background: var(--primary-light); 
-            padding: 16px; 
-            border-radius: 4px; 
-            margin-top: 12px; 
-            line-height: 1.5; 
-            border: 1px solid var(--border); 
-        }
-        
-        /* 컴포넌트: 뷰 모드 컨트롤 */
-        .view-mode-control { 
-            display: flex; 
-            background: var(--primary-light); 
-            padding: 4px; 
-            border-radius: 4px; 
-            margin-bottom: 20px; 
-            gap: 4px; 
-            border: 1px solid var(--border);
-        }
-        
-        .view-mode-btn { 
-            flex: 1; 
-            padding: 10px; 
-            text-align: center; 
-            font-size: 13px; 
-            font-weight: 700; 
-            border-radius: 4px; 
-            cursor: pointer; 
-            color: var(--text-sub); 
-            transition: 0.2s; 
-        }
-        
-        .view-mode-btn.active { 
-            background: white; 
-            color: var(--text-main); 
-            border: 1px solid var(--border);
-        }
-        
-        /* 컴포넌트: 3D 플립 카드 (한 장 보기) */
-        .flip-card { 
-            perspective: 1000px; 
-            width: 100%; 
-            height: 260px; 
-            cursor: pointer; 
-            border-radius: 4px; 
-        }
-        
-        .flip-card-inner { 
-            position: relative; 
-            width: 100%; 
-            height: 100%; 
-            transition: transform 0.6s; 
-            transform-style: preserve-3d; 
-        }
-        
-        .flip-card.flipped .flip-card-inner { 
-            transform: rotateY(180deg); 
-        }
-        
-        .flip-card-front, .flip-card-back { 
-            position: absolute; 
-            width: 100%; 
-            height: 100%; 
-            backface-visibility: hidden; 
-            border-radius: 4px; 
-            overflow: hidden; 
-            background-color: var(--primary-light); 
-            border: 1px solid var(--border);
-        }
-        
-        .flip-card-back { 
-            transform: rotateY(180deg); 
-        }
-        
-        .noti-badge { 
-            position: absolute; 
-            top: 4px; 
-            right: 4px; 
-            background: var(--danger); 
-            color: white; 
-            font-size: 10px; 
-            font-weight: bold; 
-            width: 16px; 
-            height: 16px; 
-            border-radius: 50%; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-        }
+        .login-container { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; height: 100%; padding: 24px; text-align: left; box-sizing: border-box; }
+        .auth-tabs { display: flex; margin-bottom: 24px; border-bottom: 2px solid var(--border); }
+        .auth-tabs button { flex: 1; background: none; border: none; padding: 12px 0; font-size: 16px; font-weight: 800; color: var(--text-sub); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+        .auth-tabs button.active-tab { color: var(--text-main); border-bottom: 2px solid var(--text-main); }
+        .auth-form { display: flex; flex-direction: column; width: 100%; }
 
-        /* 💡 [수정됨] 뷰: 로그인 화면 레이아웃 변경 (탭 형태 도입) */
-        .login-container { 
-            display: flex; 
-            flex-direction: column; 
-            align-items: stretch; 
-            justify-content: flex-start; 
-            height: 100%; 
-            padding: 24px; 
-            text-align: left; 
-            box-sizing: border-box;
-        }
+        .social-btn { width: 100%; padding: 16px; border-radius: 4px; font-size: 15px; font-weight: 700; cursor: pointer; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; gap: 12px; background: white; margin-bottom: 12px; color: var(--text-main); transition: 0.2s; }
+        .social-btn.kakao { background-color: var(--kakao); color: var(--kakao-text); border-color: var(--kakao); }
+        .social-btn:hover { filter: brightness(0.95); }
         
-        .auth-tabs {
-            display: flex;
-            margin-bottom: 24px;
-            border-bottom: 2px solid var(--border);
-        }
+        .input-group { margin-bottom: 20px; text-align: left; width: 100%; }
+        .title-label { display: block; font-size: 13px; font-weight: 700; color: var(--text-main); margin-bottom: 8px; }
+        .title-input { width: 100%; padding: 14px; border: 1px solid var(--border); border-radius: 4px; font-size: 15px; box-sizing: border-box; background-color: var(--primary-light); font-family: inherit; color: var(--text-main); transition: 0.2s; }
+        .title-input:focus { outline: none; border-color: var(--text-main); background-color: white; }
         
-        .auth-tabs button {
-            flex: 1;
-            background: none;
-            border: none;
-            padding: 12px 0;
-            font-size: 16px;
-            font-weight: 800;
-            color: var(--text-sub);
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            margin-bottom: -2px;
-        }
+        .photo-upload { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 160px; background-color: var(--primary-light); border: 1px dashed var(--text-sub); border-radius: 4px; cursor: pointer; color: var(--text-sub); font-size: 14px; font-weight: 700; overflow: hidden; }
+        .photo-upload img.preview { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; }
         
-        .auth-tabs button.active-tab {
-            color: var(--text-main);
-            border-bottom: 2px solid var(--text-main);
-        }
+        .submit-btn { width: 100%; padding: 18px; background-color: var(--text-main); color: white; border: 1px solid var(--text-main); border-radius: 4px; font-size: 16px; font-weight: 800; margin-top: 10px; cursor: pointer; }
+        .submit-btn:disabled { background-color: #9ca3af; border-color: #9ca3af; cursor: not-allowed; }
         
-        .auth-form {
-            display: flex;
-            flex-direction: column;
-            width: 100%;
-        }
+        .fab-container { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; display: flex; justify-content: center; z-index: 40; pointer-events: none; }
+        .fab-btn { pointer-events: auto; background-color: var(--text-main); color: white; border: 1px solid var(--text-main); padding: 16px 28px; border-radius: 4px; font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); cursor: pointer; }
+        
+        .modal-overlay, .bottom-sheet-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 200; opacity: 0; visibility: hidden; transition: all 0.3s; }
+        .modal-overlay.active, .bottom-sheet-overlay.active { opacity: 1; visibility: visible; }
+        .modal-content { background: white; width: 90%; max-width: 360px; border-radius: 8px; padding: 28px 24px; box-sizing: border-box; text-align: center; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-height: 80vh; overflow-y: auto; border: 1px solid var(--border); }
+        .bottom-sheet { position: fixed; bottom: -100%; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: white; border-radius: 8px 8px 0 0; z-index: 201; padding: 24px 20px; box-sizing: border-box; transition: bottom 0.3s; border-top: 1px solid var(--border); border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+        .bottom-sheet.active { bottom: 0; }
+        .sheet-btn { width: 100%; padding: 16px; background: var(--primary-light); border: 1px solid var(--border); border-radius: 4px; font-size: 15px; font-weight: 700; margin-bottom: 12px; cursor: pointer; color: var(--text-main); }
+        .sheet-btn.cancel { background: white; border: 1px solid var(--border); color: var(--text-sub); margin-top: 8px; }
+        
+        .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); background-color: var(--text-main); color: white; padding: 12px 24px; border-radius: 4px; font-size: 14px; font-weight: 700; z-index: 1000; opacity: 0; transition: all 0.3s; white-space: nowrap; pointer-events: none; }
+        .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
 
-        .social-btn { 
-            width: 100%; 
-            padding: 16px; 
-            border-radius: 4px; 
-            font-size: 15px; 
-            font-weight: 700; 
-            cursor: pointer; 
-            border: 1px solid var(--border); 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            gap: 12px; 
-            background: white; 
-            margin-bottom: 12px; 
-            color: var(--text-main);
-            transition: background 0.2s; 
-        }
-        
-        .social-btn.kakao {
-            background-color: var(--kakao);
-            color: var(--kakao-text);
-            border-color: var(--kakao);
-        }
-        
-        .social-btn:hover { 
-            filter: brightness(0.95);
-        }
-        
-        /* 컴포넌트: 입력 폼 */
-        .input-group { 
-            margin-bottom: 20px; 
-            text-align: left; 
-            width: 100%;
-        }
-        
-        .title-label { 
-            display: block; 
-            font-size: 13px; 
-            font-weight: 700; 
-            color: var(--text-main); 
-            margin-bottom: 8px; 
-        }
-        
-        .title-input { 
-            width: 100%; 
-            padding: 14px; 
-            border: 1px solid var(--border); 
-            border-radius: 4px; 
-            font-size: 15px; 
-            box-sizing: border-box; 
-            background-color: var(--primary-light); 
-            font-family: inherit; 
-            color: var(--text-main);
-            transition: border-color 0.2s, background-color 0.2s;
-        }
-        
-        .title-input:focus {
-            outline: none;
-            border-color: var(--text-main);
-            background-color: white;
-        }
-        
-        .photo-upload { 
-            position: relative; 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            justify-content: center; 
-            width: 100%; 
-            height: 160px; 
-            background-color: var(--primary-light); 
-            border: 1px dashed var(--text-sub); 
-            border-radius: 4px; 
-            cursor: pointer; 
-            color: var(--text-sub); 
-            font-size: 14px; 
-            font-weight: 700; 
-            overflow: hidden; 
-        }
-        
-        .photo-upload img.preview { 
-            position: absolute; 
-            top: 0; 
-            left: 0; 
-            width: 100%; 
-            height: 100%; 
-            object-fit: cover; 
-            z-index: 10; 
-        }
-        
-        /* 컴포넌트: 하단 메인 버튼 및 FAB */
-        .submit-btn { 
-            width: 100%; 
-            padding: 18px; 
-            background-color: var(--text-main); 
-            color: white; 
-            border: 1px solid var(--text-main); 
-            border-radius: 4px; 
-            font-size: 16px; 
-            font-weight: 800; 
-            margin-top: 10px; 
-            cursor: pointer; 
-        }
+        .checkbox-label { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; font-weight: 600; color: var(--text-sub); cursor: pointer; margin-bottom: 12px; }
+        .checkbox-label input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--text-main); flex-shrink: 0; margin-top: 2px; }
 
-        .submit-btn:disabled {
-            background-color: #9ca3af;
-            border-color: #9ca3af;
-            cursor: not-allowed;
-        }
-        
-        .fab-container { 
-            position: fixed; 
-            bottom: 24px; 
-            left: 50%; 
-            transform: translateX(-50%); 
-            width: 100%; 
-            max-width: 480px; 
-            display: flex; 
-            justify-content: center; 
-            z-index: 40; 
-            pointer-events: none; 
-        }
-        
-        .fab-btn { 
-            pointer-events: auto; 
-            background-color: var(--text-main); 
-            color: white; 
-            border: 1px solid var(--text-main); 
-            padding: 16px 28px; 
-            border-radius: 4px; 
-            font-size: 15px; 
-            font-weight: 800; 
-            display: flex; 
-            align-items: center; 
-            gap: 8px; 
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15); 
-            cursor: pointer; 
-        }
-        
-        /* 레이아웃: 모달 및 바텀 시트 */
-        .modal-overlay, .bottom-sheet-overlay { 
-            position: fixed; 
-            top: 0; 
-            left: 0; 
-            width: 100%; 
-            height: 100%; 
-            background: rgba(0,0,0,0.6); 
-            z-index: 200; 
-            opacity: 0; 
-            visibility: hidden; 
-            transition: all 0.3s; 
-        }
-        
-        .modal-overlay.active, .bottom-sheet-overlay.active { 
-            opacity: 1; 
-            visibility: visible; 
-        }
-        
-        .modal-content { 
-            background: white; 
-            width: 90%; 
-            max-width: 360px; 
-            border-radius: 8px; 
-            padding: 28px 24px; 
-            box-sizing: border-box; 
-            text-align: center; 
-            position: absolute; 
-            top: 50%; 
-            left: 50%; 
-            transform: translate(-50%, -50%); 
-            max-height: 80vh; 
-            overflow-y: auto; 
-            border: 1px solid var(--border);
-        }
-        
-        .bottom-sheet { 
-            position: fixed; 
-            bottom: -100%; 
-            left: 50%; 
-            transform: translateX(-50%); 
-            width: 100%; 
-            max-width: 480px; 
-            background: white; 
-            border-radius: 8px 8px 0 0; 
-            z-index: 201; 
-            padding: 24px 20px; 
-            box-sizing: border-box; 
-            transition: bottom 0.3s; 
-            border-top: 1px solid var(--border);
-            border-left: 1px solid var(--border);
-            border-right: 1px solid var(--border);
-        }
-        
-        .bottom-sheet.active { 
-            bottom: 0; 
-        }
-        
-        .sheet-btn { 
-            width: 100%; 
-            padding: 16px; 
-            background: var(--primary-light); 
-            border: 1px solid var(--border); 
-            border-radius: 4px; 
-            font-size: 15px; 
-            font-weight: 700; 
-            margin-bottom: 12px; 
-            cursor: pointer; 
-            color: var(--text-main);
-        }
-        
-        .sheet-btn.cancel { 
-            background: white; 
-            border: 1px solid var(--border); 
-            color: var(--text-sub); 
-            margin-top: 8px; 
-        }
-        
-        /* 컴포넌트: 토스트 및 기타 */
-        .toast { 
-            position: fixed; 
-            bottom: 30px; 
-            left: 50%; 
-            transform: translateX(-50%) translateY(100px); 
-            background-color: var(--text-main); 
-            color: white; 
-            padding: 12px 24px; 
-            border-radius: 4px; 
-            font-size: 14px; 
-            font-weight: 700; 
-            z-index: 1000; 
-            opacity: 0; 
-            transition: all 0.3s; 
-            white-space: nowrap; 
-            pointer-events: none; 
-        }
-        
-        .toast.show { 
-            transform: translateX(-50%) translateY(0); 
-            opacity: 1; 
-        }
-
-        .checkbox-label { 
-            display: flex; 
-            align-items: flex-start; 
-            gap: 10px; 
-            font-size: 13px; 
-            font-weight: 600; 
-            color: var(--text-sub); 
-            cursor: pointer; 
-            margin-bottom: 12px;
-        }
-        
-        .checkbox-label input[type="checkbox"] { 
-            width: 18px; 
-            height: 18px; 
-            accent-color: var(--text-main); 
-            flex-shrink: 0;
-            margin-top: 2px;
-        }
-
-        /* 컴포넌트: 하단 푸터 (Footer) */
-        .common-footer {
-            background-color: var(--primary-light);
-            padding: 32px 20px;
-            border-top: 1px solid var(--border);
-            text-align: center;
-            margin-top: auto;
-        }
-        
-        .footer-links {
-            margin-bottom: 16px;
-            font-size: 13px;
-            font-weight: 800;
-            color: var(--text-sub);
-        }
-        
-        .footer-links span {
-            cursor: pointer;
-        }
-        
-        .footer-links .divider {
-            margin: 0 10px;
-            color: var(--border);
-            cursor: default;
-        }
-        
-        .footer-info {
-            font-size: 12px;
-            color: #9ca3af;
-            line-height: 1.6;
-        }
-        
-        .footer-info p {
-            margin: 0 0 4px 0;
-        }
-        
-        .footer-info .copyright {
-            margin-top: 12px;
-            font-weight: 800;
-            color: var(--text-sub);
-        }
+        .common-footer { background-color: var(--primary-light); padding: 32px 20px; border-top: 1px solid var(--border); text-align: center; margin-top: auto; }
+        .footer-links { margin-bottom: 16px; font-size: 13px; font-weight: 800; color: var(--text-sub); }
+        .footer-links span { cursor: pointer; }
+        .footer-links .divider { margin: 0 10px; color: var(--border); cursor: default; }
+        .footer-info { font-size: 12px; color: #9ca3af; line-height: 1.6; }
+        .footer-info p { margin: 0 0 4px 0; }
+        .footer-info .copyright { margin-top: 12px; font-weight: 800; color: var(--text-sub); }
       `}</style>
       
       {/* 시스템 카메라, 갤러리 호출용 Hidden Input */}
@@ -2083,15 +1158,20 @@ export default function App() {
                 </li>
               )}
               <li style={{borderBottom:'1px solid var(--border)'}}>
-                <button onClick={() => { setIsMenuOpen(false); setIsFeedbackModalOpen(true); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'15px', fontWeight:700, cursor:'pointer'}}>💡 피드백 전송</button>
+                <button onClick={() => { setIsMenuOpen(false); checkAuthAndAction(() => setIsFeedbackModalOpen(true)); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'15px', fontWeight:700, cursor:'pointer'}}>💡 피드백 전송</button>
               </li>
             </ul>
             
             <ul style={{listStyle:'none', padding:0, margin:0, borderTop:'1px solid var(--border)', background:'var(--primary-light)'}}>
               {currentUser ? (
-                <li>
-                  <button onClick={processLogout} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--danger)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🚪 로그아웃</button>
-                </li>
+                <>
+                    <li>
+                    <button onClick={processLogout} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🚪 로그아웃</button>
+                    </li>
+                    <li>
+                    <button onClick={deleteAccount} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', paddingTop:0, color:'var(--danger)', fontSize:'13px', fontWeight:700, cursor:'pointer', textDecoration:'underline'}}>회원 탈퇴하기</button>
+                    </li>
+                </>
               ) : (
                 <li>
                   <button onClick={() => { setIsMenuOpen(false); switchView('login'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🔐 로그인 / 회원가입</button>
@@ -2220,7 +1300,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 💡 [수정됨] 뷰: 로그인 & 회원가입 화면 */}
+      {/* 💡 뷰: 로그인 & 회원가입 화면 (이름, 이메일만 입력받도록 개선) */}
       {currentView === 'login' && (
         <div className="view-section" style={{ display:'flex', background:'white' }}>
           <div className="login-container">
@@ -2240,12 +1320,8 @@ export default function App() {
             {authMode === 'signup' ? (
                 <div className="auth-form">
                     <div className="input-group">
-                        <label className="title-label">이름 (또는 상호명)</label>
-                        <input type="text" className="title-input" placeholder="실명을 입력해주세요" value={authName} onChange={(e)=>setAuthName(e.target.value)} />
-                    </div>
-                    <div className="input-group">
-                        <label className="title-label">전화번호</label>
-                        <input type="tel" className="title-input" placeholder="숫자만 입력 (예: 01012345678)" value={authPhone} onChange={(e)=>setAuthPhone(e.target.value.replace(/[^0-9]/g, ''))} />
+                        <label className="title-label">이름</label>
+                        <input type="text" className="title-input" placeholder="실명을 입력해주세요 (필수)" value={authName} onChange={(e)=>setAuthName(e.target.value)} />
                     </div>
                     <div className="input-group">
                         <label className="title-label">이메일 주소</label>
@@ -2319,7 +1395,7 @@ export default function App() {
             <div style={{padding: '40px 20px'}}>
                 <div style={{width:'80px', height:'80px', background:'var(--text-main)', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:'40px', fontWeight:'900', margin:'0 auto 20px auto'}}>B</div>
                 <h1 style={{fontSize:'24px', fontWeight:'900', color:'var(--text-main)', marginBottom:'12px'}}>비포터 (Beforeter)</h1>
-                <p style={{fontSize:'15px', color:'var(--text-sub)', lineHeight:'1.6', marginBottom:'40px', fontWeight:'600'}}>단 2장의 사진으로 당신의 전문성을 증명하세요.<br/>고객의 신뢰를 얻는 가장 완벽한 작업 리포트 플랫폼</p>
+                <p style={{fontSize:'15px', color:'var(--text-sub)', lineHeight:'1.6', marginBottom:'40px', fontWeight:'600'}}>단 2장의 사진으로 당신의 전문성을 증명하세요.<br/>고객의 신뢰를 얻는 가장 완벽 작업 리포트 플랫폼</p>
 
                 <div style={{textAlign:'left', display:'flex', flexDirection:'column', gap:'16px'}}>
                     <div style={{background:'var(--primary-light)', padding:'20px', borderRadius:'4px', border:'1px solid var(--border)'}}>
@@ -2379,6 +1455,11 @@ export default function App() {
                 <span style={{fontSize: '20px', fontWeight: '800', color: 'var(--text-main)'}}>{myFeeds.length}</span>
                 <span style={{fontSize: '13px', color: 'var(--text-sub)', fontWeight: '700'}}>작성한 리포트</span>
               </div>
+            </div>
+            
+            {/* 💡 마이페이지 하단에 위치한 회원 탈퇴 버튼 */}
+            <div style={{ marginTop: '40px', textAlign: 'center' }}>
+                <button onClick={deleteAccount} style={{ background: 'none', border: 'none', color: 'var(--text-sub)', fontSize: '12px', textDecoration: 'underline', cursor: 'pointer' }}>회원 탈퇴</button>
             </div>
           </div>
           
@@ -2456,8 +1537,8 @@ export default function App() {
           
           <div className="feed-container">
             {publicProfileFeeds.length === 0 ? (
-              <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)'}}>
-                <p style={{ margin: 0, fontWeight: 700 }}>아직 공개된 리포트가 없습니다.</p>
+              <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)', fontWeight: 700}}>
+                아직 공개된 리포트가 없습니다.
               </div>
             ) : (
               publicProfileFeeds.map((item, idx) => {
@@ -2535,7 +1616,7 @@ export default function App() {
                     </div>
                 </div>
                 
-                <textarea className="title-input" style={{fontSize:'14px', height:'80px', resize:'none', marginTop:0}} placeholder="작업 전후 통합 상세 설명 (어떤 과정을 거쳤나요?)" value={sp.desc} onChange={(e) => handleSpaceDescChange(index, 'desc', e.target.value)}></textarea>
+                <textarea className="title-input" style={{fontSize:'14px', height:'80px', resize:'none', marginTop:0}} placeholder="상세 설명 (어떤 과정을 거쳤나요?)" value={sp.desc} onChange={(e) => handleSpaceDescChange(index, 'desc', e.target.value)}></textarea>
               </div>
             ))}
             
@@ -2700,7 +1781,7 @@ export default function App() {
       )}
 
       {/* 모달: 카카오 알림톡 전송 */}
-      <div className={`modal-overlay ${isAlimtalkModalOpen ? 'active' : ''}`}>
+      <div className={`modal-overlay ${isAlimtalkModalOpen ? 'active' : ''}`} style={{zIndex: 999}}>
         <div className="modal-content" style={{ padding: '24px 20px', width: '90%' }}>
           <h3 style={{ marginTop: 0, marginBottom: '12px', fontSize: '18px', fontWeight:'900' }}>고객에게 알림톡 전송</h3>
           <p style={{fontSize:'13px', color:'var(--text-sub)', marginBottom:'20px', lineHeight:'1.5', fontWeight:'600'}}>
@@ -2773,6 +1854,12 @@ export default function App() {
             <label className="title-label" style={{ fontSize: '13px' }}>상호</label>
             <input type="text" className="title-input" style={{ padding: '12px' }} placeholder="예: 김반장 클린" value={editCompany} onChange={(e) => setEditCompany(e.target.value)} />
           </div>
+          
+          <div className="input-group" style={{ marginBottom: '16px' }}>
+            <label className="title-label" style={{ fontSize: '13px' }}>연락처 (휴대폰 번호)</label>
+            <input type="tel" className="title-input" style={{ padding: '12px' }} placeholder="숫자만 입력 (예: 01012345678)" value={editPhone} onChange={(e) => setEditPhone(e.target.value.replace(/[^0-9]/g, ''))} />
+          </div>
+
           <div className="input-group" style={{ marginBottom: '16px' }}>
             <label className="title-label" style={{ fontSize: '13px' }}>
                 사업자 등록번호 
@@ -2926,7 +2013,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className={`modal-overlay ${confirmDialog.show ? 'active' : ''}`}>
+      <div className={`modal-overlay ${confirmDialog.show ? 'active' : ''}`} style={{zIndex: 1000}}>
         <div className="modal-content" style={{width:'80%', maxWidth:'320px', padding:'24px 20px'}}>
             <h3 style={{marginTop:0, marginBottom:'16px', fontSize:'16px', color:'var(--text-main)', lineHeight:'1.5', fontWeight:'800'}}>{confirmDialog.msg}</h3>
             <div style={{display:'flex', gap:'10px', marginTop:'20px'}}>
