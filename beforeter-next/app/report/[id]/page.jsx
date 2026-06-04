@@ -1,36 +1,50 @@
 import App from "../../page"; // 메인 App 컴포넌트 불러오기
 
+const PROJECT_ID = "beforeter-72de2";
+const APP_ID = 'beforeter-app';
+
 // 💡 1. 카카오톡 봇이 URL을 읽을 때 실행되는 서버 사이드 메타태그 생성기
-// Firebase SDK를 쓰지 않고 REST API(fetch)를 써서 에러를 원천 차단합니다.
 export async function generateMetadata({ params }) {
   const resolvedParams = await params;
   const { id } = resolvedParams;
-  
-  // 대표님의 프로젝트 ID (고정)
-  const PROJECT_ID = "beforeter-72de2"; 
+
+  // 💡 [안전장치 1] 에러가 나더라도 무조건 카톡 카드를 띄워줄 '기본 세팅값'
+  const fallbackOG = {
+    title: '비포터 - 당신의 작업 파트너',
+    description: '전문가의 작업 결과물을 지금 확인해보세요.',
+    openGraph: {
+      title: '비포터 - 당신의 작업 파트너',
+      description: '전문가의 작업 결과물을 지금 확인해보세요.',
+      images: ['https://www.beforeter.com/default-og-image.png'], // 기본 이미지
+      url: `https://www.beforeter.com/report/${id}`,
+      type: 'website',
+    }
+  };
 
   try {
-    // 🚀 구글 Firestore REST API를 이용해 데이터를 0.1초 만에 직접 가져옵니다.
-    const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/artifacts/beforeter-app/public/data/reports/${id}`;
+    const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/artifacts/${APP_ID}/public/data/reports/${id}`;
     
     const res = await fetch(url, { cache: 'no-store' });
 
-    if (!res.ok) {
-      return { title: '리포트를 찾을 수 없습니다 - 비포터' };
-    }
+    // 문서를 못 찾았을 경우 빈 링크가 아닌 기본 카드를 띄움
+    if (!res.ok) return fallbackOG;
 
     const data = await res.json();
 
-    // REST API 형식에 맞춰 데이터 파싱
+    // 💡 [안전장치 2] 데이터가 비어있어도 절대 에러가 나지 않도록 물음표(?.) 처리
     const title = data.fields?.title?.stringValue || '작업 리포트';
     const authorName = data.fields?.authorName?.stringValue || '작업자';
     
-    // 사진이 있는 경우 After 사진 추출
-    let coverImg = 'https://www.beforeter.com/default-og-image.png'; // 디폴트 썸네일
-    if (data.fields?.spaces?.arrayValue?.values?.length > 0) {
-      const firstSpace = data.fields.spaces.arrayValue.values[0].mapValue.fields;
-      if (firstSpace.afterImg?.stringValue) {
-         coverImg = firstSpace.afterImg.stringValue;
+    let coverImg = 'https://www.beforeter.com/default-og-image.png';
+
+    // 💡 [안전장치 3] spaces 배열 파싱 시 극한의 에러 방어
+    const spacesArr = data.fields?.spaces?.arrayValue?.values;
+    if (spacesArr && spacesArr.length > 0) {
+      const firstSpaceFields = spacesArr[0]?.mapValue?.fields;
+      // After 이미지가 없으면 Before 이미지라도 가져오도록 백업 처리
+      const fetchedImg = firstSpaceFields?.afterImg?.stringValue || firstSpaceFields?.beforeImg?.stringValue;
+      if (fetchedImg) {
+         coverImg = fetchedImg;
       }
     }
 
@@ -47,11 +61,8 @@ export async function generateMetadata({ params }) {
     };
   } catch (error) {
     console.error("메타태그 생성 중 에러:", error);
-    // 에러 발생 시 카톡에 뜨는 최후의 보루 텍스트
-    return { 
-      title: '비포터 - 당신의 작업 파트너',
-      description: '단 2장의 사진으로 전문성을 증명하세요.' 
-    };
+    // 💡 [안전장치 4] 최악의 서버 에러 시에도 무조건 카톡 카드는 뜨게 만듦
+    return fallbackOG;
   }
 }
 

@@ -117,8 +117,13 @@ export default function App() {
   const [authMode, setAuthMode] = useState('login'); 
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [authPasswordConfirm, setAuthPasswordConfirm] = useState(''); 
   const [authName, setAuthName] = useState('');
   const [authPhone, setAuthPhone] = useState('');
+  
+  const [isCodeSent, setIsCodeSent] = useState(false);
+  const [phoneVerifyCode, setPhoneVerifyCode] = useState('');
+  const [isPhoneVerified, setIsPhoneVerified] = useState(false);
 
   // 유저 및 데이터 상태
   const [currentUser, setCurrentUser] = useState(null); 
@@ -461,11 +466,28 @@ export default function App() {
     setConfirmDialog({ show: true, msg, onConfirm: () => { action(); setConfirmDialog({show: false, msg:'', onConfirm:null}); } });
   };
 
+  const handleSendVerification = () => {
+    if(authPhone.length < 10) return showToast("올바른 휴대폰 번호를 입력해주세요.");
+    setIsCodeSent(true);
+    showToast("인증번호가 발송되었습니다. (테스트용: 123456)");
+  };
+
+  const handleVerifyCode = () => {
+    if(phoneVerifyCode === '123456') {
+        setIsPhoneVerified(true);
+        showToast("휴대폰 인증이 완료되었습니다.");
+    } else {
+        showToast("인증번호가 일치하지 않습니다.");
+    }
+  };
+
   const processEmailSignup = async () => {
     if (!termsAgreed || !privacyAgreed) return showToast("서비스 이용약관 및 개인정보 수집에 동의해주세요.");
-    if (!authName.trim() || !authEmail.trim() || !authPassword) {
+    if (!authName.trim() || !authPhone.trim() || !authEmail.trim() || !authPassword) {
         return showToast("모든 정보를 올바르게 입력해주세요.");
     }
+    if (!isPhoneVerified) return showToast("휴대폰 인증을 완료해주세요.");
+    if (authPassword !== authPasswordConfirm) return showToast("비밀번호가 일치하지 않습니다.");
     if (authPassword.length < 6) return showToast("비밀번호는 6자리 이상이어야 합니다.");
 
     try {
@@ -476,7 +498,7 @@ export default function App() {
         const newUserData = {
             id: user.uid,
             name: authName,
-            phone: '', 
+            phone: authPhone, 
             email: authEmail,
             provider: 'Email',
             company: '',
@@ -493,7 +515,7 @@ export default function App() {
         
         sendEmailNotification(
             `[비포터] 🎉 정식 회원가입 완료!`,
-            `이름: ${authName}\n이메일: ${authEmail}\n\n이메일 기반 정식 회원가입이 완료되었습니다.`
+            `이름: ${authName}\n연락처: ${authPhone}\n이메일: ${authEmail}\n\n이메일 기반 정식 회원가입이 완료되었습니다.`
         );
 
         showToast(`${authName}님, 비포터에 오신 것을 환영합니다!`);
@@ -560,11 +582,14 @@ export default function App() {
   const processLogout = async () => {
     try { 
       await signOut(auth); 
-      // 💡 [수정됨] 로그아웃 시 기존 폼 입력 데이터들을 안전하게 초기화합니다.
       setAuthEmail('');
       setAuthPassword('');
+      setAuthPasswordConfirm('');
       setAuthName('');
       setAuthPhone('');
+      setPhoneVerifyCode('');
+      setIsCodeSent(false);
+      setIsPhoneVerified(false);
       
       showToast('로그아웃 되었습니다.'); 
       setIsMenuOpen(false); 
@@ -574,17 +599,13 @@ export default function App() {
     }
   };
 
-  // 💡 [수정됨] 회원 탈퇴 시 Firestore의 사용자 정보도 함께 삭제하도록 로직을 강화했습니다.
   const deleteAccount = async () => {
-    triggerConfirm("정말 탈퇴하시겠습니까? 작성한 리포트는 유지되나, 계정 정보가 삭제됩니다.", async () => {
+    triggerConfirm("정말 탈퇴하시겠습니까? 작성한 데이터는 삭제되지 않습니다.", async () => {
         try {
             const user = auth.currentUser;
             if (user) {
-                // Firestore 데이터 삭제 추가
                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.uid));
-                // Firebase Auth 계정 삭제
                 await deleteUser(user);
-                
                 showToast("회원 탈퇴가 완료되었습니다.");
                 setIsMenuOpen(false);
                 switchView('feed');
@@ -942,7 +963,6 @@ export default function App() {
   const publicProfileFeeds = publicProfileUser ? publicFeeds.filter(f => f.authorId === publicProfileUser.id) : [];
   const unreadNotis = notifications.filter(n => !n.isRead).length + (appUpdateNoti && !appUpdateNoti.isRead ? 1 : 0);
 
-  // 💡 [수정됨] 회원가입 폼 유효성 검사 (이름 필수, 연락처 제거됨)
   const isSignupValid = authName.trim() && authEmail.trim() && authPassword.length >= 6 && termsAgreed && privacyAgreed;
   const isLoginValid = authEmail.trim() && authPassword.trim();
 
@@ -966,22 +986,26 @@ export default function App() {
   return (
     <div className="app-wrapper">
       <style>{`
-        /* 글로벌 설정 및 초기화 */
-        html { overflow-y: scroll; }
+        /* 💡 화면 너비 출렁임(Jumping) 방지용 뷰포트 고정 속성 */
+        html { overflow-y: scroll; overflow-x: hidden; width: 100vw; }
         body { 
             font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; 
-            background-color: #f3f4f6; margin: 0; padding: 0; color: #111827; 
+            background-color: #f1f5f9; margin: 0; padding: 0; color: #111827; 
             -webkit-tap-highlight-color: transparent; overflow-x: hidden; 
         }
         
-        /* 디자인 토큰 개편: Black & White 모노톤 */
         :root { 
             --primary: #000000; --primary-hover: #333333; --primary-light: #f9fafb; 
             --card-bg: #ffffff; --text-main: #111827; --text-sub: #6b7280; 
             --danger: #dc2626; --kakao: #FEE500; --kakao-text: #000000; --border: #e5e7eb;
+            --hancom-focus: #111827; 
         }
         
-        .app-wrapper { max-width: 480px; margin: 0 auto; min-height: 100vh; background-color: #ffffff; position: relative; display: flex; flex-direction: column; }
+        .app-wrapper { 
+            max-width: 480px; width: 100%; margin: 0 auto; min-height: 100vh; 
+            background-color: #ffffff; position: relative; display: flex; flex-direction: column; 
+            overflow-x: hidden; box-shadow: 0 0 20px rgba(0,0,0,0.05);
+        }
         
         .app-header { 
             position: sticky; top: 0; left: 0; width: 100%; height: 56px; background-color: var(--card-bg); 
@@ -1038,26 +1062,35 @@ export default function App() {
         .flip-card-back { transform: rotateY(180deg); }
         .noti-badge { position: absolute; top: 4px; right: 4px; background: var(--danger); color: white; font-size: 10px; font-weight: bold; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
 
-        .login-container { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; height: 100%; padding: 24px; text-align: left; box-sizing: border-box; }
-        .auth-tabs { display: flex; margin-bottom: 24px; border-bottom: 2px solid var(--border); }
-        .auth-tabs button { flex: 1; background: none; border: none; padding: 12px 0; font-size: 16px; font-weight: 800; color: var(--text-sub); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+        .login-container { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; height: 100%; padding: 40px 24px; text-align: left; box-sizing: border-box; max-width: 400px; margin: 0 auto; background: white;}
+        .auth-tabs { display: flex; margin-bottom: 32px; border-bottom: 2px solid var(--border); }
+        .auth-tabs button { flex: 1; background: none; border: none; padding: 14px 0; font-size: 16px; font-weight: 800; color: var(--text-sub); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: 0.2s; }
         .auth-tabs button.active-tab { color: var(--text-main); border-bottom: 2px solid var(--text-main); }
         .auth-form { display: flex; flex-direction: column; width: 100%; }
 
-        .social-btn { width: 100%; padding: 16px; border-radius: 4px; font-size: 15px; font-weight: 700; cursor: pointer; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; gap: 12px; background: white; margin-bottom: 12px; color: var(--text-main); transition: 0.2s; }
+        .social-btn { width: 100%; padding: 14px; border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; gap: 12px; background: white; margin-bottom: 12px; color: var(--text-main); transition: 0.2s; }
         .social-btn.kakao { background-color: var(--kakao); color: var(--kakao-text); border-color: var(--kakao); }
         .social-btn:hover { filter: brightness(0.95); }
         
         .input-group { margin-bottom: 20px; text-align: left; width: 100%; }
-        .title-label { display: block; font-size: 13px; font-weight: 700; color: var(--text-main); margin-bottom: 8px; }
-        .title-input { width: 100%; padding: 14px; border: 1px solid var(--border); border-radius: 4px; font-size: 15px; box-sizing: border-box; background-color: var(--primary-light); font-family: inherit; color: var(--text-main); transition: 0.2s; }
-        .title-input:focus { outline: none; border-color: var(--text-main); background-color: white; }
+        .title-label { display: block; font-size: 14px; font-weight: 700; color: var(--text-main); margin-bottom: 8px; }
+        
+        .title-input { width: 100%; height: 48px; border: 1px solid var(--border); border-radius: 6px; font-size: 15px; padding: 0 16px; box-sizing: border-box; background-color: #ffffff; font-family: inherit; color: var(--text-main); transition: border-color 0.2s, box-shadow 0.2s; }
+        .title-input::placeholder { color: #a1a1aa; }
+        .title-input:focus { outline: none; border-color: var(--hancom-focus); box-shadow: 0 0 0 1px var(--hancom-focus); }
+        .title-input:disabled { background-color: #f3f4f6; cursor: not-allowed; color: #9ca3af;}
+
+        .verify-flex { display: flex; gap: 8px; }
+        .verify-btn { height: 48px; padding: 0 16px; background-color: white; border: 1px solid var(--text-main); color: var(--text-main); border-radius: 6px; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap; transition: 0.2s;}
+        .verify-btn:hover { background-color: #f9fafb; }
+        .verify-btn:disabled { border-color: var(--border); color: #a1a1aa; cursor: not-allowed; background: white; }
+        .verify-btn.success { background-color: #f0fdf4; border-color: #16a34a; color: #16a34a; }
         
         .photo-upload { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 160px; background-color: var(--primary-light); border: 1px dashed var(--text-sub); border-radius: 4px; cursor: pointer; color: var(--text-sub); font-size: 14px; font-weight: 700; overflow: hidden; }
         .photo-upload img.preview { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 10; }
         
-        .submit-btn { width: 100%; padding: 18px; background-color: var(--text-main); color: white; border: 1px solid var(--text-main); border-radius: 4px; font-size: 16px; font-weight: 800; margin-top: 10px; cursor: pointer; }
-        .submit-btn:disabled { background-color: #9ca3af; border-color: #9ca3af; cursor: not-allowed; }
+        .submit-btn { width: 100%; height: 52px; background-color: var(--text-main); color: white; border: 1px solid var(--text-main); border-radius: 6px; font-size: 16px; font-weight: 800; margin-top: 10px; cursor: pointer; transition: 0.2s; }
+        .submit-btn:disabled { background-color: #e5e7eb; border-color: #e5e7eb; color: #9ca3af; cursor: not-allowed; }
         
         .fab-container { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; display: flex; justify-content: center; z-index: 40; pointer-events: none; }
         .fab-btn { pointer-events: auto; background-color: var(--text-main); color: white; border: 1px solid var(--text-main); padding: 16px 28px; border-radius: 4px; font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); cursor: pointer; }
@@ -1085,33 +1118,23 @@ export default function App() {
         .footer-info .copyright { margin-top: 12px; font-weight: 800; color: var(--text-sub); }
       `}</style>
       
-      {/* 시스템 카메라, 갤러리 호출용 Hidden Input */}
       <div style={{ position: 'absolute', width: '1px', height: '1px', padding: 0, margin: '-1px', overflow: 'hidden', clip: 'rect(0,0,0,0)', border: 0 }}>
         <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} />
         <input type="file" accept="image/*" ref={galleryInputRef} onChange={handleFileSelect} />
         <input type="file" accept="image/*" ref={profilePicRef} onChange={handleProfilePicSelect} />
       </div>
 
-      {/* 상단 공통 헤더 */}
       <header className="app-header">
         <button className="header-icon" onClick={toggleMenu}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="3" y1="12" x2="21" y2="12"></line>
-            <line x1="3" y1="6" x2="21" y2="6"></line>
-            <line x1="3" y1="18" x2="21" y2="18"></line>
-          </svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
         </button>
         <div className="header-title" onClick={() => switchView('feed')}>비포터</div>
         <button className="header-icon" onClick={handleOpenNoti}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-          </svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
           {unreadNotis > 0 && <span className="noti-badge">{unreadNotis}</span>}
         </button>
       </header>
 
-      {/* 공통 사이드바 메뉴 */}
       <div className={`sidebar-overlay ${isMenuOpen ? 'active' : ''}`} onClick={toggleMenu}></div>
       <div className={`sidebar ${isMenuOpen ? 'active' : ''}`}>
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -1180,7 +1203,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* 👑 뷰: 관리자 (사업자 검수) */}
       {currentView === 'admin' && currentUser?.email === 'jinthemoon@kakao.com' && (
         <div className="view-section">
           <div style={{padding:'20px', textAlign:'center', background:'var(--primary-light)', borderBottom:'1px solid var(--border)'}}>
@@ -1217,7 +1239,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 뷰: 피드 홈 */}
       {currentView === 'feed' && (
         <div className="view-section">
           <div className="feed-container" style={{paddingBottom:0}}>
@@ -1299,7 +1320,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 💡 [수정됨] 뷰: 로그인 & 회원가입 화면 (이름, 이메일만 입력받도록 개선) */}
       {currentView === 'login' && (
         <div className="view-section" style={{ display:'flex', background:'white' }}>
           <div className="login-container">
@@ -1322,16 +1342,28 @@ export default function App() {
                         <label className="title-label">이름</label>
                         <input type="text" className="title-input" placeholder="실명을 입력해주세요 (필수)" value={authName} onChange={(e)=>setAuthName(e.target.value)} />
                     </div>
+                    
                     <div className="input-group">
                         <label className="title-label">이메일 주소</label>
                         <input type="email" className="title-input" placeholder="example@email.com" value={authEmail} onChange={(e)=>setAuthEmail(e.target.value)} />
                     </div>
+
                     <div className="input-group">
                         <label className="title-label">비밀번호</label>
                         <input type="password" className="title-input" placeholder="6자리 이상 입력" value={authPassword} onChange={(e)=>setAuthPassword(e.target.value)} />
                     </div>
 
-                    <div style={{background: 'var(--primary-light)', border: '1px solid var(--border)', padding: '16px', borderRadius: '4px', marginBottom: '24px'}}>
+                    <div className="input-group">
+                        <label className="title-label">비밀번호 확인</label>
+                        <input type="password" className="title-input" placeholder="비밀번호를 한번 더 입력해주세요" value={authPasswordConfirm} onChange={(e)=>setAuthPasswordConfirm(e.target.value)} />
+                        {authPasswordConfirm.length > 0 && (
+                            <p style={{fontSize:'12px', marginTop:'6px', color: authPassword === authPasswordConfirm ? '#16a34a' : 'var(--danger)'}}>
+                                {authPassword === authPasswordConfirm ? '✓ 비밀번호가 일치합니다.' : '비밀번호가 일치하지 않습니다.'}
+                            </p>
+                        )}
+                    </div>
+
+                    <div style={{background: 'var(--primary-light)', border: '1px solid var(--border)', padding: '16px', borderRadius: '6px', marginBottom: '24px'}}>
                         <label className="checkbox-label" style={{margin:0, borderBottom:'1px solid var(--border)', paddingBottom:'12px', marginBottom:'12px'}}>
                             <input type="checkbox" checked={termsAgreed && privacyAgreed} onChange={(e)=>{setTermsAgreed(e.target.checked); setPrivacyAgreed(e.target.checked)}} />
                             <span style={{fontWeight:'800', color:'var(--text-main)'}}>전체 약관 동의 (필수)</span>
@@ -1388,41 +1420,50 @@ export default function App() {
         </div>
       )}
 
-      {/* 뷰: 서비스 소개 */}
+      {/* 💡 [수정됨] 서비스 소개 섹션 전면 개편 (정부지원사업 공고 맞춤형 어필) */}
       {currentView === 'about' && (
         <div className="view-section" style={{background:'#ffffff', textAlign:'center'}}>
-            <div style={{padding: '40px 20px'}}>
-                <div style={{width:'80px', height:'80px', background:'var(--text-main)', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:'40px', fontWeight:'900', margin:'0 auto 20px auto'}}>B</div>
-                <h1 style={{fontSize:'24px', fontWeight:'900', color:'var(--text-main)', marginBottom:'12px'}}>비포터 (Beforeter)</h1>
-                <p style={{fontSize:'15px', color:'var(--text-sub)', lineHeight:'1.6', marginBottom:'40px', fontWeight:'600'}}>단 2장의 사진으로 당신의 전문성을 증명하세요.<br/>고객의 신뢰를 얻는 가장 완벽 작업 리포트 플랫폼</p>
+            <div style={{padding: '40px 20px', maxWidth: '440px', margin: '0 auto'}}>
+                <div style={{width:'80px', height:'80px', background:'var(--text-main)', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:'40px', fontWeight:'900', margin:'0 auto 24px auto'}}>B</div>
+                <h1 style={{fontSize:'24px', fontWeight:'900', color:'var(--text-main)', marginBottom:'12px'}}>동네 사장님을 위한 든든한 무기, 비포터</h1>
+                <p style={{fontSize:'15px', color:'var(--text-sub)', lineHeight:'1.6', marginBottom:'48px', fontWeight:'600'}}>
+                    플랫폼 수수료에 지친 로컬 소상공인 여러분,<br/>
+                    이제 오직 <b>'실력'</b> 하나로 정당한 가치를 인정받으세요.
+                </p>
 
-                <div style={{textAlign:'left', display:'flex', flexDirection:'column', gap:'16px'}}>
-                    <div style={{background:'var(--primary-light)', padding:'20px', borderRadius:'4px', border:'1px solid var(--border)'}}>
-                        <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--text-main)', display:'flex', alignItems:'center', gap:'8px', fontWeight:'900'}}>⚡ 10초 완성 리포트</h3>
-                        <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.5', fontWeight:'600'}}>작업 전/후 사진만 올리면 깔끔하고 전문적인 리포트가 자동으로 생성됩니다.</p>
+                <div style={{textAlign:'left', display:'flex', flexDirection:'column', gap:'20px'}}>
+                    <div style={{background:'var(--primary-light)', padding:'24px', borderRadius:'12px', border:'1px solid var(--border)'}}>
+                        <h3 style={{margin:'0 0 12px 0', fontSize:'17px', color:'var(--text-main)', fontWeight:'900'}}>01. 실력은 있는데 마케팅이 막막하신가요? 🍋</h3>
+                        <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.6', fontWeight:'600'}}>
+                            청소, 인테리어, 미용 등 오프라인 서비스는 시공 전까지 실력을 알 수 없는 대표적인 '레몬 마켓'입니다. 비포터는 단 10초 만에 작성되는 Before/After 리포트를 통해 사장님의 실력을 직관적으로 증명하고 고객의 불안을 완전히 해소합니다.
+                        </p>
                     </div>
-                    <div style={{background:'var(--primary-light)', padding:'20px', borderRadius:'4px', border:'1px solid var(--border)'}}>
-                        <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--text-main)', display:'flex', alignItems:'center', gap:'8px', fontWeight:'900'}}>🔗 간편한 URL 공유</h3>
-                        <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.5', fontWeight:'600'}}>작업 완료 후 카카오톡으로 링크 하나만 보내면, 고객이 바로 결과를 확인할 수 있습니다.</p>
+                    <div style={{background:'var(--primary-light)', padding:'24px', borderRadius:'12px', border:'1px solid var(--border)'}}>
+                        <h3 style={{margin:'0 0 12px 0', fontSize:'17px', color:'var(--text-main)', fontWeight:'900'}}>02. 오프라인 노동의 디지털 자산화 💾</h3>
+                        <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.6', fontWeight:'600'}}>
+                            현장에서 땀 흘려 일한 훌륭한 결과물들을 휴대폰 사진첩에만 방치하지 마세요. 비포터로 작성된 리포트는 투명한 데이터가 되어 차곡차곡 쌓이며, 사장님만의 가장 강력한 '신뢰 자산'이자 영업 무기가 됩니다.
+                        </p>
                     </div>
-                    <div style={{background:'var(--primary-light)', padding:'20px', borderRadius:'4px', border:'1px solid var(--border)'}}>
-                        <h3 style={{margin:'0 0 8px 0', fontSize:'16px', color:'var(--text-main)', display:'flex', alignItems:'center', gap:'8px', fontWeight:'900'}}>👤 나만의 오픈 프로필</h3>
-                        <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.5', fontWeight:'600'}}>그동안 올린 리포트가 내 프로필에 쌓여, 자연스럽게 나의 실력을 증명하는 포트폴리오가 됩니다.</p>
+                    <div style={{background:'var(--primary-light)', padding:'24px', borderRadius:'12px', border:'1px solid var(--border)'}}>
+                        <h3 style={{margin:'0 0 12px 0', fontSize:'17px', color:'var(--text-main)', fontWeight:'900'}}>03. 수수료 없는 완전한 독립 생태계 💸</h3>
+                        <p style={{margin:0, fontSize:'14px', color:'var(--text-sub)', lineHeight:'1.6', fontWeight:'600'}}>
+                            대형 매칭 플랫폼의 과도한 수수료와 출혈 경쟁에 지치셨나요? 비포터가 제공하는 '오픈 프로필'로 나만의 독자적인 포트폴리오를 구축하세요. 인스타그램, 블로그 등 어디서든 고객을 직접 유치하고 지역 기반의 탄탄한 성장을 이뤄낼 수 있습니다.
+                        </p>
                     </div>
                 </div>
 
-                <button className="submit-btn" style={{marginTop:'40px'}} onClick={() => switchView(currentUser ? 'feed' : 'login')}>
-                    {currentUser ? '피드로 돌아가기' : '지금 바로 시작하기'}
+                <button className="submit-btn" style={{marginTop:'48px', height:'56px'}} onClick={() => switchView(currentUser ? 'feed' : 'login')}>
+                    {currentUser ? '피드로 돌아가기' : '비포터와 함께 시작하기'}
                 </button>
             </div>
             {renderFooter()}
         </div>
       )}
 
-      {/* 💡 [수정됨] 뷰: 마이페이지 (이메일 정보 표시 및 탈퇴 버튼 은닉) */}
+      {/* 💡 [수정됨] 뷰: 마이페이지 - 피드백 탭 추가 및 기능 고도화 */}
       {currentView === 'mypage' && currentUser && (
         <div className="view-section">
-          <div className="mypage-header" style={{background: 'var(--card-bg)', padding: '30px 20px', textAlign: 'center', borderBottom: '1px solid var(--border)', position: 'relative'}}>
+          <div className="mypage-header" style={{background: 'var(--card-bg)', padding: '30px 20px 0 20px', textAlign: 'center', position: 'relative'}}>
             <button style={{position: 'absolute', top: '16px', right: '16px', background: 'white', border: '1px solid var(--border)', padding: '6px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', color: 'var(--text-main)'}} onClick={openProfileEdit}>
               프로필 수정
             </button>
@@ -1438,7 +1479,6 @@ export default function App() {
             </h2>
             {currentUser.company && <p style={{margin:'4px 0 0 0', fontSize:'14px', color:'var(--text-sub)', fontWeight:'600'}}>{currentUser.company}</p>}
             
-            {/* 💡 [추가됨] 가입 이메일 및 제공자 표시 */}
             <p style={{margin:'8px 0 0 0', fontSize:'13px', color:'var(--text-sub)', fontWeight:'700'}}>
               📧 {currentUser.email || '이메일 없음'} &nbsp;|&nbsp; 🔗 {currentUser.provider === 'Email' ? '이메일' : currentUser.provider} 가입
             </p>
@@ -1454,51 +1494,80 @@ export default function App() {
               내 오픈 프로필 미리보기
             </button>
 
-            <div style={{display: 'flex', justifyContent: 'center', gap: '40px', marginTop: '20px'}}>
-              <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center'}}>
-                <span style={{fontSize: '20px', fontWeight: '800', color: 'var(--text-main)'}}>{myFeeds.length}</span>
-                <span style={{fontSize: '13px', color: 'var(--text-sub)', fontWeight: '700'}}>작성한 리포트</span>
-              </div>
-            </div>
-            
-            {/* 💡 [수정됨] 마이페이지 맨 하단에 은닉된 회원 탈퇴 버튼 */}
-            <div style={{ marginTop: '40px', textAlign: 'center' }}>
-                <button onClick={deleteAccount} style={{ background: 'none', border: 'none', color: 'var(--text-sub)', fontSize: '12px', textDecoration: 'underline', cursor: 'pointer' }}>회원 탈퇴</button>
+            {/* 마이페이지 탭 전환 버튼 */}
+            <div style={{display: 'flex', marginTop: '24px'}}>
+              <button 
+                style={{flex: 1, padding: '16px 0', fontWeight: '800', fontSize: '15px', transition: '0.2s', color: myPageTab === 'reports' ? 'var(--text-main)' : 'var(--text-sub)', borderBottom: myPageTab === 'reports' ? '3px solid var(--text-main)' : '3px solid transparent'}} 
+                onClick={() => setMyPageTab('reports')}>
+                내 리포트 ({myFeeds.length})
+              </button>
+              <button 
+                style={{flex: 1, padding: '16px 0', fontWeight: '800', fontSize: '15px', transition: '0.2s', color: myPageTab === 'feedbacks' ? 'var(--text-main)' : 'var(--text-sub)', borderBottom: myPageTab === 'feedbacks' ? '3px solid var(--text-main)' : '3px solid transparent'}} 
+                onClick={() => setMyPageTab('feedbacks')}>
+                보낸 피드백 ({myFeedbacks.length})
+              </button>
             </div>
           </div>
           
           <div className="feed-container">
-            {myFeeds.length === 0 ? (
-              <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)'}}>
-                <p style={{ margin: 0, fontWeight: 700 }}>작성한 리포트가 없습니다.</p>
-              </div>
+            {myPageTab === 'reports' ? (
+                <>
+                {myFeeds.length === 0 ? (
+                  <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)'}}>
+                    <p style={{ margin: 0, fontWeight: 700 }}>작성한 리포트가 없습니다.</p>
+                  </div>
+                ) : (
+                  myFeeds.map((item, idx) => {
+                      const renderSpaces = item.spaces && item.spaces.length > 0 ? item.spaces : [{ beforeImg: item.beforeImg, afterImg: item.afterImg }];
+                      return (
+                        <div key={item.id} className="feed-card" onClick={() => openDetailView(item.id)}>
+                          <div className="feed-title" style={{marginBottom: '10px'}}>
+                            {item.status === 'private' ? '🔒 ' : ''}{item.title}
+                          </div>
+                          <div style={{display:'flex', gap:'16px', fontSize:'13px', color:'var(--text-sub)', marginTop:'12px', fontWeight:'700'}}>
+                            <span>📅 {item.taskDate?.replace(/-/g, '.')}</span>
+                            <span>❤️ {(item.likes || []).length}</span>
+                            <span>💬 {(item.comments || []).length}</span>
+                          </div>
+                          <div className="feed-images" style={{marginTop:'12px'}}>
+                            <div className="feed-img-wrap"><img src={renderSpaces[0].beforeImg} alt="Before" /></div>
+                            <div className="feed-img-wrap"><img src={renderSpaces[0].afterImg} alt="After" /></div>
+                          </div>
+                        </div>
+                      )
+                    })
+                )}
+                </>
             ) : (
-              myFeeds.map((item, idx) => {
-                  const renderSpaces = item.spaces && item.spaces.length > 0 ? item.spaces : [{ beforeImg: item.beforeImg, afterImg: item.afterImg }];
-                  return (
-                    <div key={item.id} className="feed-card" onClick={() => openDetailView(item.id)}>
-                      <div className="feed-title" style={{marginBottom: '10px'}}>
-                        {item.status === 'private' ? '🔒 ' : ''}{item.title}
-                      </div>
-                      <div style={{display:'flex', gap:'16px', fontSize:'13px', color:'var(--text-sub)', marginTop:'12px', fontWeight:'700'}}>
-                        <span>📅 {item.taskDate?.replace(/-/g, '.')}</span>
-                        <span>❤️ {(item.likes || []).length}</span>
-                        <span>💬 {(item.comments || []).length}</span>
-                      </div>
-                      <div className="feed-images" style={{marginTop:'12px'}}>
-                        <div className="feed-img-wrap"><img src={renderSpaces[0].beforeImg} alt="Before" /></div>
-                        <div className="feed-img-wrap"><img src={renderSpaces[0].afterImg} alt="After" /></div>
-                      </div>
+                <>
+                {myFeedbacks.length === 0 ? (
+                  <div style={{textAlign:'center', padding:'40px 20px', color:'var(--text-sub)'}}>
+                    <p style={{ margin: 0, fontWeight: 700 }}>전송한 피드백 내역이 없습니다.</p>
+                  </div>
+                ) : (
+                  myFeedbacks.map(fb => (
+                    <div key={fb.id} style={{background:'white', padding:'16px', borderRadius:'8px', marginBottom:'12px', border:'1px solid var(--border)', boxShadow:'0 2px 4px rgba(0,0,0,0.02)'}}>
+                        <div style={{display:'flex', justifyContent:'space-between', marginBottom:'8px'}}>
+                            <div style={{fontSize:'12px', fontWeight:'900', color:'var(--primary)', background:'var(--primary-light)', padding:'4px 8px', borderRadius:'4px'}}>[{fb.category}]</div>
+                            <div style={{fontSize:'12px', color:'var(--text-sub)', fontWeight:'600'}}>
+                                {fb.createdAt?.toDate ? fb.createdAt.toDate().toLocaleDateString('ko-KR') : '방금 전'}
+                            </div>
+                        </div>
+                        <div style={{fontSize:'14px', color:'var(--text-main)', lineHeight:'1.5', fontWeight:'600'}}>{fb.text}</div>
                     </div>
-                  )
-                })
+                  ))
+                )}
+                </>
             )}
+
+            <div style={{ marginTop: '40px', paddingBottom: '20px', textAlign: 'center' }}>
+                <button onClick={deleteAccount} style={{ background: 'none', border: 'none', color: 'var(--text-sub)', fontSize: '13px', textDecoration: 'underline', cursor: 'pointer', fontWeight:'600' }}>회원 탈퇴 처리</button>
+            </div>
           </div>
           {renderFooter()}
         </div>
       )}
 
-      {/* 뷰: 공개 프로필 */}
       {currentView === 'public-profile' && publicProfileUser && (
         <div className="view-section">
           <div style={{background: 'var(--card-bg)', padding: '20px 20px 30px 20px', textAlign: 'center', borderBottom: '1px solid var(--border)', position: 'relative'}}>
@@ -1638,7 +1707,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 💡 [수정됨] 뷰: 리포트 상세 보기 (넘버링 제거) */}
       {currentView === 'detail' && detailReport && (
         <div className="view-section" style={{paddingTop: '20px'}}>
           <div className="feed-container">
@@ -1888,28 +1956,12 @@ export default function App() {
         </div>
       </div>
 
-      {/* 알림 모달 */}
+      {/* 💡 [수정됨] 버전 번호만 표시하는 깔끔해진 알림 모달 */}
       <div className={`modal-overlay ${isNotiModalOpen ? 'active' : ''}`}>
         <div className="modal-content" style={{maxHeight:'80vh', overflowY:'auto'}}>
           <h3 style={{ marginTop: 0, marginBottom: '20px', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', fontWeight:'900' }}>알림센터</h3>
           
-          {appUpdateNoti && (
-             <div style={{padding:'16px', borderBottom:'1px solid var(--border)', background: appUpdateNoti.isRead ? 'transparent' : 'var(--primary-light)', borderRadius:'4px', marginBottom:'12px', textAlign:'left', border:'1px solid var(--border)'}}>
-                <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
-                    <div>
-                        <p style={{margin:0, fontSize:'14px', color: appUpdateNoti.isRead ? 'var(--text-sub)' : 'var(--text-main)', fontWeight:'900', marginBottom:'6px'}}>
-                            {appUpdateNoti.fromName}
-                        </p>
-                        <p style={{margin:0, fontSize:'13px', color:'var(--text-main)', lineHeight:'1.5', fontWeight:'600'}}>
-                            {appUpdateNoti.text}
-                        </p>
-                    </div>
-                    {appUpdateNoti.isRead && <span style={{fontSize:'11px', color:'var(--text-sub)', whiteSpace:'nowrap', marginLeft:'8px'}}>읽음</span>}
-                </div>
-             </div>
-          )}
-
-          {notifications.length === 0 && (!appUpdateNoti) ? (
+          {notifications.length === 0 ? (
             <div style={{padding:'40px 0'}}>
               <p style={{fontSize:'14px', color:'var(--text-sub)', margin:0, fontWeight:'700'}}>새로운 알림이 없습니다.</p>
             </div>
@@ -1928,6 +1980,12 @@ export default function App() {
               <button className="sheet-btn" style={{marginTop:'16px', fontSize:'14px'}} onClick={markAllNotisAsRead}>모두 읽음 처리</button>
             </div>
           )}
+          
+          {/* 하단 버전 정보 */}
+          <div style={{marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--border)', textAlign: 'center', fontSize: '12px', color: 'var(--text-sub)', fontWeight: '600'}}>
+             현재 앱 버전: {APP_VERSION}
+          </div>
+          
           <button className="sheet-btn cancel" onClick={() => setIsNotiModalOpen(false)}>닫기</button>
         </div>
       </div>
@@ -1964,23 +2022,6 @@ export default function App() {
           <textarea className="title-input" style={{height:'100px', resize:'none', marginBottom:'16px'}} placeholder="자유롭게 적어주세요!" value={feedbackText} onChange={(e) => setFeedbackText(e.target.value)}></textarea>
           
           <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none', marginBottom:'24px' }} onClick={submitFeedback}>보내기</button>
-          
-          <div style={{textAlign:'left', borderTop:'1px solid var(--border)', paddingTop:'16px'}}>
-            <h4 style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 12px 0', fontWeight:'900'}}>내가 보낸 피드백 내역 ({myFeedbacks.length}건)</h4>
-            <div style={{maxHeight:'150px', overflowY:'auto'}}>
-              {myFeedbacks.length === 0 ? (
-                <p style={{fontSize:'13px', color:'var(--text-sub)', textAlign:'center', fontWeight:'700'}}>전송한 피드백이 없습니다.</p>
-              ) : (
-                myFeedbacks.map(fb => (
-                  <div key={fb.id} style={{background:'var(--primary-light)', padding:'10px', borderRadius:'4px', marginBottom:'8px', border:'1px solid var(--border)'}}>
-                    <div style={{fontSize:'12px', fontWeight:'900', color:'var(--text-main)'}}>[{fb.category}]</div>
-                    <div style={{fontSize:'13px', color:'var(--text-main)', marginTop:'4px', fontWeight:'600'}}>{fb.text}</div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-          
           <button className="sheet-btn cancel" onClick={() => setIsFeedbackModalOpen(false)}>닫기</button>
         </div>
       </div>
