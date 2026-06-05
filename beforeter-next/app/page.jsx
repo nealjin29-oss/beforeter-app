@@ -61,7 +61,7 @@ const db = getFirestore(app);
 const storage = getStorage(app); 
 
 const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'beforeter-app';
-const APP_VERSION = 'v1.0.4 (2026-06-03 배포)';
+const APP_VERSION = 'v1.0.5 (2026-06-05 배포)'; // 버전 업데이트
 
 const EMAILJS_SERVICE_ID = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID : "";
 const EMAILJS_TEMPLATE_ID = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID : "";
@@ -112,6 +112,7 @@ export default function App() {
   // 뷰 컨트롤 및 네비게이션 상태
   const [currentView, setCurrentView] = useState('feed'); 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [myPageTab, setMyPageTab] = useState('reports'); // 마이페이지 탭 상태 추가
   
   // 인증 폼 상태 (로그인 / 회원가입)
   const [authMode, setAuthMode] = useState('login'); 
@@ -154,6 +155,7 @@ export default function App() {
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
   const [isAlimtalkModalOpen, setIsAlimtalkModalOpen] = useState(false);
   const [isAlimtalkSending, setIsAlimtalkSending] = useState(false); 
+  const [isSubscribeModalOpen, setIsSubscribeModalOpen] = useState(false); // 구독 모달 상태 추가
   
   const [postOptionsMenu, setPostOptionsMenu] = useState(null); 
   const [isReportPostModalOpen, setIsReportPostModalOpen] = useState(false);
@@ -323,7 +325,10 @@ export default function App() {
             keywords: [], 
             email: user.email || '', 
             provider: user.providerData[0]?.providerId === 'oidc.kakao' ? 'Kakao' : (user.providerData[0]?.providerId === 'password' ? 'Email' : 'Google'),
-            phone: ''
+            phone: '',
+            plan: 'free',
+            usageCount: 0,
+            lastUsageMonth: new Date().toISOString().slice(0, 7)
           };
           
           if (userSnap.exists()) {
@@ -332,8 +337,8 @@ export default function App() {
             if (userData.provider !== 'Email') {
               await setDoc(userRef, userData);
               sendEmailNotification(
-                  `[비포터] 🎉 새로운 작업자 회원가입!`,
-                  `이름: ${userData.name}\n이메일: ${userData.email}\n가입 플랫폼: ${userData.provider}\n\n새로운 회원이 비포터에 합류했습니다.`
+                `[비포터] 🎉 새로운 작업자 회원가입!`,
+                `이름: ${userData.name}\n이메일: ${userData.email}\n가입 플랫폼: ${userData.provider}\n\n새로운 회원이 비포터에 합류했습니다.`
               );
             }
           }
@@ -345,7 +350,10 @@ export default function App() {
             name: user.displayName || '작업자', 
             profilePic: user.photoURL || '', 
             email: user.email || '', 
-            provider: 'Google'
+            provider: 'Google',
+            plan: 'free',
+            usageCount: 0,
+            lastUsageMonth: new Date().toISOString().slice(0, 7)
           });
         }
         
@@ -508,7 +516,10 @@ export default function App() {
             profilePic: '',
             intro: '',
             keywords: [],
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
+            plan: 'free',
+            usageCount: 0,
+            lastUsageMonth: new Date().toISOString().slice(0, 7)
         };
 
         await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.uid), newUserData);
@@ -667,6 +678,7 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
+  // 💡 [오류 수정] 누락되었던 필수 함수들(사진 선택, 프로필 저장, 사업자 승인, 사진 모달 등)을 완벽하게 복구했습니다.
   const handleProfilePicSelect = (e) => { 
     if (e.target.files[0]) { resizeAndCompressImage(e.target.files[0], setEditProfilePic, 400); }
     e.target.value = ''; 
@@ -723,16 +735,17 @@ export default function App() {
   };
 
   const openPhotoSheet = (index, type) => { setCurrentPhotoTarget({ index, type }); setIsPhotoSheetOpen(true); };
+  
   const triggerPhotoInput = (type) => { 
     setIsPhotoSheetOpen(false); 
     if (type === 'camera') cameraInputRef.current.click(); else galleryInputRef.current.click();
   };
-  
+
   const handleFileSelect = (e) => {
     const file = e.target.files[0];
     if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        alert("이미지 용량이 너무 큽니다. 10MB 이하의 사진만 업로드 가능합니다.");
+      if (file.size > 10 * 1024 * 1024 && (currentUser?.plan || 'free') !== 'premium') {
+        alert("무료 요금제는 10MB 이하의 사진만 업로드 가능합니다.");
         e.target.value = ''; return;
       }
       if (currentPhotoTarget) {
@@ -761,6 +774,25 @@ export default function App() {
     if (!taskTitle || !taskDate) return showToast("작업 일자와 제목을 입력해주세요!");
     if (spaces.some(sp => !sp.beforeImg || !sp.afterImg)) return showToast("모든 공간의 사진을 첨부해주세요!");
 
+    // Freemium 요금제 한도 체크 로직
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    let currentUsage = currentUser.usageCount || 0;
+    let lastMonth = currentUser.lastUsageMonth || currentMonth;
+
+    if (lastMonth !== currentMonth) {
+      currentUsage = 0; // 달이 변경되었으면 초기화
+    }
+
+    const requiredCount = spaces.length;
+
+    if ((currentUser.plan || 'free') !== 'premium') {
+      if (currentUsage + requiredCount > 20) {
+        showToast(`무료 요금제는 이번 달 남은 작성 횟수가 부족합니다. (남은 횟수: ${Math.max(0, 20 - currentUsage)}회)`);
+        switchView('pricing');
+        return;
+      }
+    }
+
     setIsUploading(true); 
     showToast("저장 중...");
     
@@ -788,6 +820,15 @@ export default function App() {
         location: shareLocation ? currentLocation : '', createdAt: serverTimestamp()
       });
       
+      // 요금제 카운트 업데이트
+      try {
+        await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentUser.id), {
+            usageCount: currentUsage + requiredCount,
+            lastUsageMonth: currentMonth
+        });
+        setCurrentUser(prev => ({...prev, usageCount: currentUsage + requiredCount, lastUsageMonth: currentMonth}));
+      } catch(e) { console.error("요금제 카운트 업데이트 실패", e); }
+
       sendEmailNotification(`[비포터] 🚀 새 리포트 등록`, `작성자: ${currentUser.name}\n작업 제목: ${taskTitle}\n링크: https://www.beforeter.com/report/${docRef.id}`);
       setLatestReportId(docRef.id); setIsFinishModalOpen(true);
     } catch (error) { 
@@ -949,6 +990,25 @@ export default function App() {
     } catch(e) { showToast("프로필을 불러오지 못했습니다."); } finally { setIsDetailLoading(false); }
   };
 
+  const handleSubscribe = async () => {
+    if (!currentUser) {
+        showToast("로그인이 필요합니다.");
+        switchView('login');
+        return;
+    }
+    try {
+        await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'subscription_interests'), {
+            userId: currentUser.id,
+            email: currentUser.email,
+            name: currentUser.name,
+            requestedAt: serverTimestamp()
+        });
+        setIsSubscribeModalOpen(true);
+    } catch(e) {
+        showToast("오류가 발생했습니다.");
+    }
+  };
+
   const formatDisplayTime = (item) => {
     let displayStr = item.taskDate ? item.taskDate.replace(/-/g, '.') : "날짜 미상";
     if (item.location) displayStr += ` • ${item.location}`;
@@ -965,6 +1025,19 @@ export default function App() {
 
   const isSignupValid = authName.trim() && authEmail.trim() && authPassword.length >= 6 && termsAgreed && privacyAgreed;
   const isLoginValid = authEmail.trim() && authPassword.trim();
+
+  // 마이페이지 요금제 상태 문자열 구하기 로직
+  const getCurrentUsageText = () => {
+    if(!currentUser) return { planName: '', usageText: '' };
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    let displayUsage = currentUser.usageCount || 0;
+    if (currentUser.lastUsageMonth && currentUser.lastUsageMonth !== currentMonth) {
+        displayUsage = 0;
+    }
+    const planName = currentUser.plan === 'premium' ? 'PRO 요금제' : '무료 요금제';
+    const usageText = currentUser.plan === 'premium' ? '무제한' : `${20 - displayUsage}회 / 20회`;
+    return { planName, usageText };
+  };
 
   const renderFooter = () => (
     <div className="common-footer">
@@ -1173,6 +1246,10 @@ export default function App() {
               </li>
               <li style={{borderBottom:'1px solid var(--border)'}}>
                 <button onClick={() => { setIsMenuOpen(false); switchView('about'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'15px', fontWeight:700, cursor:'pointer'}}>📖 서비스 소개</button>
+              </li>
+              {/* 요금제 안내 메뉴 추가 */}
+              <li style={{borderBottom:'1px solid var(--border)'}}>
+                <button onClick={() => { setIsMenuOpen(false); switchView('pricing'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'18px 20px', color:'var(--text-main)', fontSize:'15px', fontWeight:700, cursor:'pointer'}}>💎 요금제 안내</button>
               </li>
               {currentUser && (
                 <li style={{borderBottom:'1px solid var(--border)'}}>
@@ -1420,7 +1497,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 💡 [수정됨] 서비스 소개 섹션 전면 개편 (정부지원사업 공고 맞춤형 어필) */}
       {currentView === 'about' && (
         <div className="view-section" style={{background:'#ffffff', textAlign:'center'}}>
             <div style={{padding: '40px 20px', maxWidth: '440px', margin: '0 auto'}}>
@@ -1460,7 +1536,42 @@ export default function App() {
         </div>
       )}
 
-      {/* 💡 [수정됨] 뷰: 마이페이지 - 피드백 탭 추가 및 기능 고도화 */}
+      {/* 💡 요금제(Pricing) 소개 뷰 */}
+      {currentView === 'pricing' && (
+        <div className="view-section" style={{background:'#ffffff', textAlign:'center', paddingBottom: '80px'}}>
+            <div style={{padding: '40px 20px', maxWidth: '440px', margin: '0 auto'}}>
+                <h1 style={{fontSize:'24px', fontWeight:'900', color:'var(--text-main)', marginBottom:'12px'}}>비포터 요금제</h1>
+                <p style={{fontSize:'15px', color:'var(--text-sub)', lineHeight:'1.6', marginBottom:'40px', fontWeight:'600'}}>
+                    사장님의 비즈니스 성장에 맞는<br/>최적의 플랜을 선택하세요.
+                </p>
+
+                <div style={{background:'var(--primary-light)', padding:'24px', borderRadius:'12px', border:'1px solid var(--border)', marginBottom:'20px', textAlign:'left'}}>
+                    <h3 style={{margin:'0 0 8px 0', fontSize:'20px', color:'var(--text-main)', fontWeight:'900'}}>Starter <span style={{fontSize:'14px', color:'var(--text-sub)', fontWeight:'600'}}>(무료)</span></h3>
+                    <div style={{fontSize:'24px', fontWeight:'900', color:'var(--text-main)', marginBottom:'16px'}}>0원 <span style={{fontSize:'14px', color:'var(--text-sub)', fontWeight:'600'}}>/ 월</span></div>
+                    <ul style={{paddingLeft:'20px', margin:0, color:'var(--text-sub)', fontSize:'14px', lineHeight:'1.8', fontWeight:'700'}}>
+                        <li>매월 20개 리포트 작성 가능 (구역당 1개)</li>
+                        <li>오픈 프로필 기본 제공</li>
+                        <li>10MB 이하 사진 업로드</li>
+                    </ul>
+                </div>
+
+                <div style={{background:'white', padding:'24px', borderRadius:'12px', border:'2px solid var(--text-main)', marginBottom:'20px', textAlign:'left', position:'relative', boxShadow:'0 8px 20px rgba(0,0,0,0.08)'}}>
+                    <div style={{position:'absolute', top:'-14px', right:'20px', background:'var(--text-main)', color:'white', padding:'6px 12px', borderRadius:'20px', fontSize:'12px', fontWeight:'800'}}>Best Choice</div>
+                    <h3 style={{margin:'0 0 8px 0', fontSize:'20px', color:'var(--text-main)', fontWeight:'900'}}>Pro <span style={{fontSize:'14px', color:'var(--text-sub)', fontWeight:'600'}}>(유료)</span></h3>
+                    <div style={{fontSize:'24px', fontWeight:'900', color:'var(--text-main)', marginBottom:'16px'}}>9,900원 <span style={{fontSize:'14px', color:'var(--text-sub)', fontWeight:'600'}}>/ 월</span></div>
+                    <ul style={{paddingLeft:'20px', margin:0, color:'var(--text-main)', fontSize:'14px', lineHeight:'1.8', fontWeight:'700'}}>
+                        <li><strong style={{color:'var(--text-main)', fontWeight:'900'}}>리포트 무제한 작성</strong></li>
+                        <li><strong style={{color:'var(--text-main)', fontWeight:'900'}}>대용량(10MB 이상) 원본 사진 업로드</strong></li>
+                        <li>오픈 프로필 커스텀 (출시 예정)</li>
+                        <li>알림톡 CRM 자동 발송 (출시 예정)</li>
+                    </ul>
+                    <button className="submit-btn" style={{marginTop:'24px'}} onClick={handleSubscribe}>월 9,900원 구독하기</button>
+                </div>
+            </div>
+            {renderFooter()}
+        </div>
+      )}
+
       {currentView === 'mypage' && currentUser && (
         <div className="view-section">
           <div className="mypage-header" style={{background: 'var(--card-bg)', padding: '30px 20px 0 20px', textAlign: 'center', position: 'relative'}}>
@@ -1483,6 +1594,18 @@ export default function App() {
               📧 {currentUser.email || '이메일 없음'} &nbsp;|&nbsp; 🔗 {currentUser.provider === 'Email' ? '이메일' : currentUser.provider} 가입
             </p>
 
+            <div style={{marginTop: '16px', background: 'var(--primary-light)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                <div style={{textAlign: 'left'}}>
+                    <span style={{fontSize: '11px', fontWeight: '800', color: getCurrentUsageText().planName === 'PRO 요금제' ? 'white' : 'var(--text-main)', background: getCurrentUsageText().planName === 'PRO 요금제' ? 'var(--text-main)' : 'var(--border)', padding: '4px 8px', borderRadius: '4px', display: 'inline-block', marginBottom: '8px'}}>
+                        {getCurrentUsageText().planName}
+                    </span>
+                    <div style={{fontSize: '14px', color: 'var(--text-sub)', fontWeight: '700'}}>이번 달 남은 리포트 작성</div>
+                </div>
+                <div style={{fontSize: '20px', fontWeight: '900', color: 'var(--text-main)'}}>
+                    {getCurrentUsageText().usageText}
+                </div>
+            </div>
+
             <div style={{marginTop:'12px'}}>
                 <p style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 8px 0', fontWeight:'700'}}>{currentUser.intro || '자기소개를 입력해주세요.'}</p>
                 <div style={{display:'flex', gap:'6px', justifyContent:'center', flexWrap:'wrap'}}>
@@ -1494,15 +1617,14 @@ export default function App() {
               내 오픈 프로필 미리보기
             </button>
 
-            {/* 마이페이지 탭 전환 버튼 */}
             <div style={{display: 'flex', marginTop: '24px'}}>
               <button 
-                style={{flex: 1, padding: '16px 0', fontWeight: '800', fontSize: '15px', transition: '0.2s', color: myPageTab === 'reports' ? 'var(--text-main)' : 'var(--text-sub)', borderBottom: myPageTab === 'reports' ? '3px solid var(--text-main)' : '3px solid transparent'}} 
+                style={{flex: 1, padding: '16px 0', fontWeight: '800', fontSize: '15px', transition: '0.2s', color: myPageTab === 'reports' ? 'var(--text-main)' : 'var(--text-sub)', borderBottom: myPageTab === 'reports' ? '3px solid var(--text-main)' : '3px solid transparent', background:'none', cursor:'pointer'}} 
                 onClick={() => setMyPageTab('reports')}>
                 내 리포트 ({myFeeds.length})
               </button>
               <button 
-                style={{flex: 1, padding: '16px 0', fontWeight: '800', fontSize: '15px', transition: '0.2s', color: myPageTab === 'feedbacks' ? 'var(--text-main)' : 'var(--text-sub)', borderBottom: myPageTab === 'feedbacks' ? '3px solid var(--text-main)' : '3px solid transparent'}} 
+                style={{flex: 1, padding: '16px 0', fontWeight: '800', fontSize: '15px', transition: '0.2s', color: myPageTab === 'feedbacks' ? 'var(--text-main)' : 'var(--text-sub)', borderBottom: myPageTab === 'feedbacks' ? '3px solid var(--text-main)' : '3px solid transparent', background:'none', cursor:'pointer'}} 
                 onClick={() => setMyPageTab('feedbacks')}>
                 보낸 피드백 ({myFeedbacks.length})
               </button>
@@ -1865,6 +1987,18 @@ export default function App() {
         </div>
       </div>
 
+      {/* 모달: 구독하기 진행중 */}
+      <div className={`modal-overlay ${isSubscribeModalOpen ? 'active' : ''}`} style={{zIndex: 1000}}>
+        <div className="modal-content" style={{ padding: '32px 24px', width: '90%' }}>
+            <div style={{fontSize:'40px', marginBottom:'16px'}}>🚀</div>
+            <h3 style={{ marginTop: 0, marginBottom: '16px', fontSize: '18px', fontWeight:'900' }}>출시 준비 중입니다!</h3>
+            <p style={{fontSize:'14px', color:'var(--text-sub)', marginBottom:'24px', lineHeight:'1.6', fontWeight:'600'}}>
+                유료 버전은 곧 출시됩니다.<br/>잠시만 기다려주세요! 감사합니다.
+            </p>
+            <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none', margin:0 }} onClick={() => setIsSubscribeModalOpen(false)}>확인</button>
+        </div>
+      </div>
+
       {/* 모달: 이용약관 및 개인정보처리방침 */}
       <div className={`modal-overlay ${isTermsModalOpen ? 'active' : ''}`}>
         <div className="modal-content" style={{ padding: '24px 20px', width: '95%', maxHeight:'85vh' }}>
@@ -1956,7 +2090,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* 💡 [수정됨] 버전 번호만 표시하는 깔끔해진 알림 모달 */}
       <div className={`modal-overlay ${isNotiModalOpen ? 'active' : ''}`}>
         <div className="modal-content" style={{maxHeight:'80vh', overflowY:'auto'}}>
           <h3 style={{ marginTop: 0, marginBottom: '20px', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', fontWeight:'900' }}>알림센터</h3>
