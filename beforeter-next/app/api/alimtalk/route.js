@@ -1,23 +1,32 @@
-// 버튼 클릭 시 호출되는 함수 예시
-const handleSendAlimtalk = async () => {
+import { NextResponse } from 'next/server';
+import { SolapiMessageService } from 'solapi';
+
+// 환경 변수를 사용하여 솔라피 서비스 초기화
+const messageService = new SolapiMessageService(
+  process.env.SOLAPI_API_KEY,
+  process.env.SOLAPI_API_SECRET
+);
+
+export async function POST(req) {
   try {
-    const res = await fetch('/api/send-alimtalk', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json', // 헤더를 추가해 주세요
-      },
-      body: JSON.stringify({
-        phone: '01063496088', // 실제 전송할 번호
-        variables: {
-          '#{이름}': '홍길동',
-          '#{서비스명}': '비포터'
-        }
-      })
+    const { phone, variables } = await req.json();
+
+    const response = await messageService.send({
+      to: phone,
+      from: process.env.SOLAPI_SENDER_NUMBER,
+      kakaoOptions: {
+        pfId: process.env.SOLAPI_PF_ID,
+        templateId: process.env.SOLAPI_TEMPLATE_ID,
+        variables: variables 
+      }
     });
 
-    const data = await res.json();
-    console.log('결과:', data);
+    return NextResponse.json({ success: true, response });
   } catch (error) {
-    console.error('전송 실패:', error);
+    console.error('알림톡 전송 중 오류 발생:', error);
+    return NextResponse.json(
+      { success: false, error: error.message || '전송에 실패했습니다.' },
+      { status: 500 }
+    );
   }
-};
+}
