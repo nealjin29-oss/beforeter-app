@@ -20,8 +20,6 @@ import {
   addDoc, 
   doc, 
   getDoc, 
-  getDocs, 
-  setDoc, 
   query, 
   onSnapshot, 
   serverTimestamp, 
@@ -60,7 +58,7 @@ const db = getFirestore(app);
 const storage = getStorage(app); 
 
 const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'beforeter-app';
-const APP_VERSION = 'v1.0.8 (2026-06-05 배포)';
+const APP_VERSION = 'v1.0.9 (2026-06-06 배포)';
 
 const EMAILJS_SERVICE_ID = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_EMAILJS_SERVICE_ID : "";
 const EMAILJS_TEMPLATE_ID = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_EMAILJS_TEMPLATE_ID : "";
@@ -153,7 +151,6 @@ export default function App() {
   const [shareLocation, setShareLocation] = useState(true);
   const [currentLocation, setCurrentLocation] = useState('위치 파악 중...');
   const [isLocationEditing, setIsLocationEditing] = useState(false); 
-  const [showModeTooltip, setShowModeTooltip] = useState(false); 
   
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState(false);
@@ -723,9 +720,14 @@ export default function App() {
     }
   };
 
+  // 💡 [수정됨] 로그인 하지 않은 상태에서 댓글 작성 시 로그인 화면으로 즉시 리다이렉트
   const submitComment = async () => {
     if (!commentInput.trim()) return;
-    if (!currentUser) return showToast("로그인 후 이용 가능합니다.");
+    if (!currentUser) {
+        showToast("로그인 후 이용 가능합니다.");
+        switchView('login');
+        return;
+    }
     const newComment = { id: crypto.randomUUID(), authorId: currentUser.id, authorName: currentUser.name, authorPic: currentUser.profilePic, text: commentInput.trim(), createdAt: Date.now() };
     try {
         const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'reports', detailReport.id);
@@ -740,7 +742,11 @@ export default function App() {
 
   const handleToggleLike = async (report, e) => {
     if (e) e.stopPropagation(); 
-    if (!currentUser) return showToast("로그인 후 이용 가능합니다.");
+    if (!currentUser) {
+        showToast("로그인 후 이용 가능합니다.");
+        switchView('login');
+        return;
+    }
     const isLiked = report.likes?.includes(currentUser.id);
     let newLikes = report.likes || [];
     if (isLiked) newLikes = newLikes.filter(id => id !== currentUser.id); else newLikes.push(currentUser.id);
@@ -847,7 +853,10 @@ export default function App() {
   const myFeeds = currentUser ? feedData.filter(f => f.authorId === currentUser.id) : [];
   const publicProfileFeeds = publicProfileUser ? publicFeeds.filter(f => f.authorId === publicProfileUser.id) : [];
   const unreadNotis = notifications.filter(n => !n.isRead).length + (appUpdateNoti && !appUpdateNoti.isRead ? 1 : 0);
-  const isSignupValid = authName.trim() && authEmail.trim() && authPassword.length >= 6 && termsAgreed && privacyAgreed;
+  
+  // 💡 [오류 수정] boolean 명시적 변환으로 Next.js 렌더링 충돌(Objects are not valid...) 원천 차단
+  const isSignupValid = Boolean(authName.trim() && authEmail.trim() && authPassword.length >= 6 && termsAgreed && privacyAgreed);
+  const isLoginValid = Boolean(authEmail.trim() && authPassword.trim());
 
   const getCurrentUsageText = () => {
     if(!currentUser) return { planName: '', usageText: '' };
@@ -886,11 +895,14 @@ export default function App() {
         html { overflow-y: scroll; overflow-x: hidden; width: 100vw; }
         body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; background-color: #f1f5f9; margin: 0; padding: 0; color: #111827; -webkit-tap-highlight-color: transparent; overflow-x: hidden; }
         :root { --primary: #000000; --primary-hover: #333333; --primary-light: #f9fafb; --card-bg: #ffffff; --text-main: #111827; --text-sub: #6b7280; --danger: #dc2626; --kakao: #FEE500; --kakao-text: #000000; --border: #e5e7eb; --hancom-focus: #111827; }
+        
+        /* 💡 [수정됨] 마이페이지에서 화면이 홀쭉해지는 현상을 방지하기 위해 app-wrapper 구조 개선 */
         .app-wrapper { max-width: 480px; width: 100%; margin: 0 auto; min-height: 100vh; background-color: #ffffff; position: relative; display: flex; flex-direction: column; overflow-x: hidden; box-shadow: 0 0 20px rgba(0,0,0,0.05); }
         .app-header { position: sticky; top: 0; left: 0; width: 100%; height: 56px; background-color: var(--card-bg); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; z-index: 50; border-bottom: 1px solid var(--border); box-sizing: border-box; }
         .header-icon { background: none; border: none; color: var(--text-main); font-size: 24px; cursor: pointer; padding: 8px; display: flex; align-items: center; justify-content: center; border-radius: 4px; transition: 0.2s; }
         .header-title { font-size: 18px; font-weight: 900; color: var(--primary); letter-spacing: -0.5px; cursor: pointer; }
-        .view-section { padding-bottom: 100px; flex: 1; box-sizing: border-box; background: #ffffff; display: flex; flex-direction: column; }
+        .view-section { padding-bottom: 100px; flex: 1; box-sizing: border-box; background: #ffffff; display: flex; flex-direction: column; width: 100%; }
+        
         .filter-scroll { display: flex; gap: 8px; overflow-x: auto; padding: 0 20px 16px 20px; margin: 0; scrollbar-width: none; }
         .filter-scroll::-webkit-scrollbar { display: none; }
         .filter-chip { padding: 8px 16px; border-radius: 4px; font-size: 13px; font-weight: 700; background: var(--card-bg); color: var(--text-sub); border: 1px solid var(--border); white-space: nowrap; cursor: pointer; transition: 0.2s; }
@@ -899,7 +911,7 @@ export default function App() {
         .sidebar-overlay.active { opacity: 1; visibility: visible; }
         .sidebar { position: fixed; top: 0; left: -280px; width: 280px; height: 100%; background: white; z-index: 101; transition: all 0.3s; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
         .sidebar.active { left: 0; }
-        .feed-container { padding: 16px; flex: 1; }
+        .feed-container { padding: 16px; flex: 1; width: 100%; box-sizing: border-box; }
         .feed-card { background: var(--card-bg); border-radius: 8px; padding: 16px; margin-bottom: 20px; border: 1px solid var(--border); cursor: pointer; position: relative; }
         .author-avatar { width: 36px; height: 36px; background-color: var(--primary-light); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--text-main); font-weight: bold; font-size: 14px; overflow: hidden; border: 1px solid var(--border); }
         .author-avatar img { width: 100%; height: 100%; object-fit: cover; }
@@ -952,10 +964,8 @@ export default function App() {
         .footer-links { margin-bottom: 16px; font-size: 13px; font-weight: 800; color: var(--text-sub); }
         .footer-info { font-size: 12px; color: #9ca3af; line-height: 1.6; }
         
-        /* 프로필 카드 UI 추가 CSS */
-        .profile-card { background: white; border-radius: 16px; padding: 20px; margin-bottom: 16px; border: 1px solid var(--border); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); text-align: left; position: relative; }
-        .profile-title { font-size: 15px; font-weight: 800; color: var(--text-main); margin: 0 0 12px 0; display: flex; align-items: center; gap: 6px; }
-        .profile-info-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 14px; color: var(--text-sub); font-weight: 600; }
+        /* 프로필 카드 UI (마이페이지/오픈프로필) */
+        .profile-card { background: white; border-radius: 12px; padding: 24px; margin-bottom: 16px; border: 1px solid var(--border); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); text-align: left; }
         .profile-avatar-large { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--primary-light); display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 800; color: var(--primary-hover); border: 1px solid var(--border); flex-shrink: 0; overflow: hidden; }
         
         /* 별점 CSS */
@@ -1048,14 +1058,9 @@ export default function App() {
             
             <ul style={{listStyle:'none', padding:0, margin:0, borderTop:'1px solid var(--border)', background:'var(--primary-light)'}}>
               {currentUser ? (
-                <>
-                    <li>
-                    <button onClick={processLogout} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🚪 로그아웃</button>
-                    </li>
-                    <li>
-                    <button onClick={deleteAccount} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', paddingTop:0, color:'var(--danger)', fontSize:'13px', fontWeight:700, cursor:'pointer', textDecoration:'underline'}}>회원 탈퇴하기</button>
-                    </li>
-                </>
+                <li>
+                  <button onClick={processLogout} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🚪 로그아웃</button>
+                </li>
               ) : (
                 <li>
                   <button onClick={() => { setIsMenuOpen(false); switchView('login'); }} style={{width:'100%', textAlign:'left', background:'none', border:'none', padding:'20px', color:'var(--text-main)', fontSize:'14px', fontWeight:800, cursor:'pointer'}}>🔐 로그인 / 회원가입</button>
@@ -1104,7 +1109,6 @@ export default function App() {
       {currentView === 'feed' && (
         <div className="view-section" style={{backgroundColor: '#f8fafc', paddingBottom: '100px'}}>
           
-          {/* 1. Hero & Category Squares */}
           <div style={{background: 'white', padding: '32px 20px 24px 20px', borderBottom: '1px solid var(--border)'}}>
               <h2 style={{fontSize: '22px', fontWeight: '900', color: 'var(--text-main)', marginBottom: '24px', lineHeight: '1.4'}}>
                   우리 동네 전문가를<br/>검색해보세요 🔍
@@ -1136,7 +1140,6 @@ export default function App() {
               </div>
           </div>
 
-          {/* 2. Banner */}
           <div style={{padding: '20px 20px 0 20px'}}>
             <div className="brand-hook-card" key={bannerIdx} style={{
                 animation: 'fadeSlide 0.5s ease', 
@@ -1155,7 +1158,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* 3. Recent Reports Section */}
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 20px 16px 20px'}}>
               <h3 style={{margin: 0, fontSize: '18px', fontWeight: '900', color: 'var(--text-main)'}}>최근 올라온 리포트 ✨</h3>
           </div>
@@ -1337,12 +1339,10 @@ export default function App() {
         </div>
       )}
 
-      {/* 💡 [개편됨] 뷰: 서비스 소개 */}
       {currentView === 'about' && (
         <div className="view-section" style={{background:'#ffffff', textAlign:'center'}}>
             <div style={{padding: '40px 20px', maxWidth: '440px', margin: '0 auto'}}>
                 
-                {/* 메인 타이틀 섹션 */}
                 <div style={{width:'80px', height:'80px', background:'var(--text-main)', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontSize:'40px', fontWeight:'900', margin:'0 auto 24px auto', boxShadow:'0 10px 25px rgba(0,0,0,0.1)'}}>B</div>
                 <h1 style={{fontSize:'26px', fontWeight:'900', color:'var(--text-main)', marginBottom:'12px', letterSpacing:'-0.5px'}}>단 10초 만에 끝나는,<br/>가장 강력한 영업 무기</h1>
                 <p style={{fontSize:'15px', color:'var(--text-sub)', lineHeight:'1.6', marginBottom:'48px', fontWeight:'600'}}>
@@ -1350,14 +1350,12 @@ export default function App() {
                     이제 오직 <b>'실력'</b> 하나로 정당한 가치를 인정받으세요.
                 </p>
 
-                {/* 💡 이용 프로세스 섹션 추가 */}
                 <div style={{textAlign:'left', marginBottom:'48px'}}>
                     <h2 style={{fontSize:'20px', fontWeight:'900', color:'var(--text-main)', marginBottom:'20px', display:'flex', alignItems:'center', gap:'8px'}}>
                         <span style={{background:'var(--primary-light)', padding:'6px', borderRadius:'6px'}}>📱</span> 비포터 이용 프로세스
                     </h2>
                     
                     <div style={{display:'flex', flexDirection:'column', gap:'16px', position:'relative'}}>
-                        {/* 연결선 (시각적 효과) */}
                         <div style={{position:'absolute', left:'24px', top:'24px', bottom:'24px', width:'2px', background:'var(--border)', zIndex:0}}></div>
                         
                         <div style={{display:'flex', gap:'16px', alignItems:'flex-start', position:'relative', zIndex:1}}>
@@ -1386,7 +1384,6 @@ export default function App() {
                     </div>
                 </div>
 
-                {/* 💡 도입 혜택 섹션 추가 */}
                 <div style={{textAlign:'left'}}>
                     <h2 style={{fontSize:'20px', fontWeight:'900', color:'var(--text-main)', marginBottom:'20px', display:'flex', alignItems:'center', gap:'8px'}}>
                         <span style={{background:'var(--primary-light)', padding:'6px', borderRadius:'6px'}}>✨</span> 비포터 도입 혜택
@@ -1457,97 +1454,60 @@ export default function App() {
         </div>
       )}
 
-      {/* 💡 마이페이지 / 프로필 분리 리팩토링 */}
+      {/* 💡 [리팩토링] 당근마켓 스타일 카드 UI 마이페이지 */}
       {currentView === 'mypage' && currentUser && (
         <div className="view-section" style={{background: '#f1f5f9'}}>
             <div style={{padding: '16px', maxWidth: '600px', margin: '0 auto'}}>
                 
-                {/* 1. 기본 프로필 정보 카드 */}
-                <div className="profile-card" style={{position: 'relative'}}>
-                    <div style={{display: 'flex', alignItems: 'center', gap: '16px'}}>
+                {/* 1. 통합 프로필 카드 */}
+                <div className="profile-card" style={{position: 'relative', padding: '24px'}}>
+                    <div style={{display: 'flex', alignItems: 'flex-start', gap: '16px'}}>
                         <div className="profile-avatar-large" onClick={() => setSelectedImage(currentUser.profilePic)}>
                             {currentUser.profilePic ? <img src={currentUser.profilePic} alt="프로필" style={{width:'100%', height:'100%', borderRadius:'50%'}} /> : (currentUser.name || '작업자').charAt(0)}
                         </div>
-                        <div>
+                        <div style={{flex: 1}}>
                             <h2 style={{margin: 0, fontSize: '20px', fontWeight: '900', color: 'var(--text-main)'}}>
-                                {currentUser.name}
+                                {currentUser.name} <span style={{fontSize:'12px', color:'var(--text-sub)', fontWeight:'600'}}>(#{currentUser.id.slice(0,6)})</span>
                             </h2>
-                            <p style={{margin: '4px 0 0 0', fontSize: '13px', color: 'var(--text-sub)', fontWeight: '600'}}>
-                                #{currentUser.id.slice(0,6)} · {currentUser.provider === 'Email' ? '이메일' : currentUser.provider} 연동
-                            </p>
+                            
+                            <div style={{display:'flex', alignItems:'center', gap:'8px', marginTop:'6px'}}>
+                                {currentUser.company && <span style={{fontSize:'14px', color:'var(--text-main)', fontWeight:'800'}}>{currentUser.company}</span>}
+                                {currentUser.bizStatus === 'approved' && <span className="biz-badge" style={{margin:0}}>사업자 인증</span>}
+                                {currentUser.bizStatus === 'pending' && <span className="biz-badge pending" style={{margin:0}}>검수중</span>}
+                            </div>
+
+                            <div style={{display:'flex', alignItems:'center', gap:'6px', marginTop:'6px'}}>
+                                <span style={{fontSize:'13px', color:'var(--text-main)', fontWeight:'800', background:'var(--primary-light)', padding:'2px 6px', borderRadius:'4px'}}>⭐ {getRatingStr(currentUser)} / 5.0</span>
+                            </div>
+                        </div>
+                        <button style={{background: 'none', border: '1px solid var(--border)', padding: '6px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', color: 'var(--text-main)'}} onClick={openProfileEdit}>
+                            수정
+                        </button>
+                    </div>
+
+                    <div style={{marginTop:'20px', padding:'12px', background:'#f8fafc', borderRadius:'8px', display:'flex', flexDirection:'column', gap:'8px'}}>
+                        <div style={{fontSize:'13px', color:'var(--text-main)'}}><span style={{marginRight:'6px'}}>📍 주요 거점:</span> <strong>{currentUser.activityArea || '미등록'}</strong></div>
+                        <div style={{fontSize:'13px', color:'var(--text-main)'}}><span style={{marginRight:'6px'}}>🚗 작업 가능:</span> <strong>{currentUser.workableArea || '미등록'}</strong></div>
+                    </div>
+
+                    <div style={{marginTop:'16px'}}>
+                        <p style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 8px 0', fontWeight:'600', lineHeight:'1.5'}}>{currentUser.intro || '자기소개를 입력해주세요.'}</p>
+                        <div style={{display:'flex', gap:'6px', flexWrap:'wrap'}}>
+                            {(currentUser.keywords || []).map(k => <span key={k} style={{background:'var(--primary-light)', color:'var(--text-main)', border:'1px solid var(--border)', padding:'4px 10px', borderRadius:'4px', fontSize:'12px', fontWeight:'800'}}>#{k}</span>)}
+                            {(!currentUser.keywords || currentUser.keywords.length === 0) && <span style={{fontSize: '12px', color: 'var(--text-sub)'}}>전문 분야 태그를 등록해주세요.</span>}
                         </div>
                     </div>
-                    <button style={{width: '100%', marginTop: '16px', padding: '12px', background: '#f8fafc', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '14px', fontWeight: '800', color: 'var(--text-main)', cursor: 'pointer'}} onClick={openProfileEdit}>
-                        프로필 수정
-                    </button>
-                </div>
 
-                {/* 2. 신뢰도 및 인증 카드 */}
-                <div className="profile-card">
-                    <h3 className="profile-title">신뢰도 및 인증</h3>
-                    <div className="profile-info-row">
-                        <span style={{fontSize: '16px'}}>🛡️</span>
-                        <span>사업자 인증:</span>
-                        {currentUser.bizStatus === 'approved' ? <span style={{color: 'var(--primary)', fontWeight: '800'}}>완료 ({currentUser.company})</span> : 
-                         currentUser.bizStatus === 'pending' ? <span style={{color: '#ca8a04', fontWeight: '800'}}>검수중 ({currentUser.company})</span> : 
-                         <span style={{color: 'var(--text-sub)'}}>미인증</span>}
-                    </div>
-                    
-                    <div className="profile-info-row" style={{marginTop: '16px'}}>
-                        <span style={{fontSize: '16px'}}>⭐</span>
-                        <span>고객 평점:</span>
-                        <span style={{color: 'var(--text-main)', fontWeight: '900', fontSize: '16px'}}>{getRatingStr(currentUser)} <span style={{fontSize:'12px', color:'var(--text-sub)', fontWeight:'600'}}>/ 5.0</span></span>
-                    </div>
-                    {/* 별점 게이지 바 */}
-                    <div className="rating-gauge-bg">
-                        <div className="rating-gauge-fill" style={{width: `${(parseFloat(getRatingStr(currentUser)) / 5) * 100}%`}}></div>
-                    </div>
-                </div>
-
-                {/* 3. 활동 지역 카드 */}
-                <div className="profile-card">
-                    <h3 className="profile-title">활동 지역</h3>
-                    <div className="profile-info-row">
-                        <span style={{fontSize: '16px'}}>📍</span>
-                        <span>주요 거점:</span>
-                        <span style={{color: 'var(--text-main)'}}>{currentUser.activityArea || '미등록'}</span>
-                    </div>
-                    <div className="profile-info-row">
-                        <span style={{fontSize: '16px'}}>🚗</span>
-                        <span>작업 가능:</span>
-                        <span style={{color: 'var(--text-main)'}}>{currentUser.workableArea || '미등록'}</span>
-                    </div>
-                </div>
-
-                {/* 4. 소개 및 전문 분야 카드 */}
-                <div className="profile-card">
-                    <h3 className="profile-title">자기 소개</h3>
-                    <p style={{margin: '0 0 16px 0', fontSize: '14px', color: 'var(--text-main)', lineHeight: '1.5', fontWeight: '600'}}>
-                        {currentUser.intro || '자기소개를 입력해주세요.'}
-                    </p>
-                    <div style={{display: 'flex', flexWrap: 'wrap', gap: '6px'}}>
-                        {(currentUser.keywords || []).map(k => <span key={k} style={{background: 'var(--primary-light)', color: 'var(--text-main)', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '800'}}>#{k}</span>)}
-                        {(!currentUser.keywords || currentUser.keywords.length === 0) && <span style={{fontSize: '13px', color: 'var(--text-sub)'}}>전문 분야 태그를 등록해주세요.</span>}
-                    </div>
-                </div>
-
-                {/* 5. 요금제 및 통계 카드 */}
-                <div className="profile-card" style={{background: 'var(--primary-light)', border: '1px solid var(--primary)', padding:'24px'}}>
-                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                        <div>
-                            <h3 className="profile-title" style={{color: 'var(--primary-hover)', marginBottom: '4px'}}>요금제 정보</h3>
-                            <div style={{fontSize: '14px', color: 'var(--text-main)', fontWeight: '700'}}>이번 달 남은 리포트</div>
-                        </div>
-                        <div style={{textAlign: 'right'}}>
-                            <span style={{display: 'inline-block', fontSize: '11px', fontWeight: '800', color: getCurrentUsageText().planName === 'PRO 요금제' ? 'white' : 'var(--text-main)', background: getCurrentUsageText().planName === 'PRO 요금제' ? 'var(--primary)' : 'white', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: '4px', marginBottom: '4px'}}>
+                    <div style={{marginTop: '20px', borderTop: '1px solid var(--border)', paddingTop: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                        <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                            <span style={{fontSize: '11px', fontWeight: '800', color: getCurrentUsageText().planName === 'PRO 요금제' ? 'white' : 'var(--text-main)', background: getCurrentUsageText().planName === 'PRO 요금제' ? 'var(--primary)' : '#e2e8f0', padding: '4px 8px', borderRadius: '4px'}}>
                                 {getCurrentUsageText().planName}
                             </span>
-                            <div style={{fontSize: '24px', fontWeight: '900', color: 'var(--text-main)'}}>{getCurrentUsageText().usageText}</div>
+                            <span style={{fontSize: '13px', color: 'var(--text-sub)', fontWeight: '600'}}>이번 달 남은 리포트</span>
                         </div>
-                    </div>
-                    <div style={{marginTop: '20px', borderTop: '1px dashed var(--primary)', paddingTop: '16px', fontSize: '14px', color: 'var(--text-main)', fontWeight: '800', display: 'flex', justifyContent: 'space-between'}}>
-                        <span>누적 리포트 개수</span>
-                        <span>{myFeeds.length} 개</span>
+                        <div style={{fontSize: '16px', fontWeight: '900', color: 'var(--text-main)'}}>
+                            {getCurrentUsageText().usageText}
+                        </div>
                     </div>
                 </div>
 
@@ -1558,7 +1518,7 @@ export default function App() {
                 {/* 탭 & 리스트 영역 */}
                 <div style={{display: 'flex', marginTop: '32px', background: 'white', borderRadius: '12px 12px 0 0', border: '1px solid var(--border)', borderBottom: 'none', overflow:'hidden'}}>
                     <button style={{flex: 1, padding: '16px 0', fontWeight: '800', fontSize: '15px', background: myPageTab === 'reports' ? 'white' : '#f8fafc', color: myPageTab === 'reports' ? 'var(--text-main)' : 'var(--text-sub)', borderBottom: myPageTab === 'reports' ? '3px solid var(--text-main)' : '3px solid transparent', cursor:'pointer', borderTop:'none', borderLeft:'none', borderRight:'none'}} onClick={() => setMyPageTab('reports')}>
-                        내 리포트
+                        내 리포트 ({myFeeds.length})
                     </button>
                     <button style={{flex: 1, padding: '16px 0', fontWeight: '800', fontSize: '15px', background: myPageTab === 'feedbacks' ? 'white' : '#f8fafc', color: myPageTab === 'feedbacks' ? 'var(--text-main)' : 'var(--text-sub)', borderBottom: myPageTab === 'feedbacks' ? '3px solid var(--text-main)' : '3px solid transparent', cursor:'pointer', borderTop:'none', borderLeft:'none', borderRight:'none'}} onClick={() => setMyPageTab('feedbacks')}>
                         보낸 피드백
@@ -1574,9 +1534,13 @@ export default function App() {
                         </div>
                         ) : (
                         myFeeds.map((item, idx) => {
+                            const myReportIndex = myFeeds.length - idx; 
                             const renderSpaces = item.spaces && item.spaces.length > 0 ? item.spaces : [{ beforeImg: item.beforeImg, afterImg: item.afterImg }];
                             return (
                                 <div key={item.id} className="feed-card" style={{border:'1px solid var(--border)', boxShadow:'none'}} onClick={() => openDetailView(item.id)}>
+                                <div style={{display:'inline-block', background:'var(--text-main)', color:'white', fontSize:'11px', fontWeight:'800', padding:'4px 8px', borderRadius:'4px', marginBottom:'8px'}}>
+                                    내 리포트 {myReportIndex}
+                                </div>
                                 <div className="feed-title" style={{marginBottom: '10px'}}>
                                     {item.status === 'private' ? '🔒 ' : ''}{item.title}
                                 </div>
@@ -1640,67 +1604,40 @@ export default function App() {
                 </button>
             </div>
 
-            {/* 1. 기본 프로필 정보 카드 */}
-            <div className="profile-card" style={{position: 'relative', marginTop:'8px'}}>
-                <div style={{display: 'flex', alignItems: 'center', gap: '16px'}}>
+            {/* 1. 통합 프로필 카드 */}
+            <div className="profile-card" style={{position: 'relative', padding: '24px'}}>
+                <div style={{display: 'flex', alignItems: 'flex-start', gap: '16px'}}>
                     <div className="profile-avatar-large" onClick={() => setSelectedImage(publicProfileUser.profilePic)}>
                         {publicProfileUser.profilePic ? <img src={publicProfileUser.profilePic} alt="프로필" style={{width:'100%', height:'100%', borderRadius:'50%'}} /> : (publicProfileUser.name || '작업자').charAt(0)}
                     </div>
-                    <div>
+                    <div style={{flex: 1}}>
                         <h2 style={{margin: 0, fontSize: '20px', fontWeight: '900', color: 'var(--text-main)'}}>
-                            {publicProfileUser.name}
+                            {publicProfileUser.name} <span style={{fontSize:'12px', color:'var(--text-sub)', fontWeight:'600'}}>(#{publicProfileUser.id.slice(0,6)})</span>
                         </h2>
-                        <p style={{margin: '4px 0 0 0', fontSize: '13px', color: 'var(--text-sub)', fontWeight: '600'}}>
-                            #{publicProfileUser.id.slice(0,6)}
-                        </p>
+                        
+                        <div style={{display:'flex', alignItems:'center', gap:'8px', marginTop:'6px'}}>
+                            {publicProfileUser.company && <span style={{fontSize:'14px', color:'var(--text-main)', fontWeight:'800'}}>{publicProfileUser.company}</span>}
+                            {publicProfileUser.bizStatus === 'approved' && <span className="biz-badge" style={{margin:0}}>사업자 인증</span>}
+                        </div>
+
+                        <div style={{display:'flex', alignItems:'center', gap:'6px', marginTop:'6px'}}>
+                            <span style={{fontSize:'13px', color:'var(--text-main)', fontWeight:'800', background:'var(--primary-light)', padding:'2px 6px', borderRadius:'4px'}}>⭐ {getRatingStr(publicProfileUser)} / 5.0</span>
+                        </div>
                     </div>
                 </div>
-            </div>
 
-            {/* 2. 신뢰도 및 인증 카드 */}
-            <div className="profile-card">
-                <h3 className="profile-title">신뢰도 및 인증</h3>
-                <div className="profile-info-row">
-                    <span style={{fontSize: '16px'}}>🛡️</span>
-                    <span>사업자 인증:</span>
-                    {publicProfileUser.bizStatus === 'approved' ? <span style={{color: 'var(--primary)', fontWeight: '800'}}>완료 ({publicProfileUser.company})</span> : 
-                        <span style={{color: 'var(--text-sub)'}}>미인증</span>}
+                {/* 활동 지역 */}
+                <div style={{marginTop:'20px', padding:'12px', background:'#f8fafc', borderRadius:'8px', display:'flex', flexDirection:'column', gap:'8px'}}>
+                    <div style={{fontSize:'13px', color:'var(--text-main)'}}><span style={{marginRight:'6px'}}>📍 주요 거점:</span> <strong>{publicProfileUser.activityArea || '미등록'}</strong></div>
+                    <div style={{fontSize:'13px', color:'var(--text-main)'}}><span style={{marginRight:'6px'}}>🚗 작업 가능:</span> <strong>{publicProfileUser.workableArea || '미등록'}</strong></div>
                 </div>
-                
-                <div className="profile-info-row" style={{marginTop: '16px'}}>
-                    <span style={{fontSize: '16px'}}>⭐</span>
-                    <span>고객 평점:</span>
-                    <span style={{color: 'var(--text-main)', fontWeight: '900', fontSize: '16px'}}>{getRatingStr(publicProfileUser)} <span style={{fontSize:'12px', color:'var(--text-sub)', fontWeight:'600'}}>/ 5.0</span></span>
-                </div>
-                {/* 별점 게이지 바 */}
-                <div className="rating-gauge-bg">
-                    <div className="rating-gauge-fill" style={{width: `${(parseFloat(getRatingStr(publicProfileUser)) / 5) * 100}%`}}></div>
-                </div>
-            </div>
 
-            {/* 3. 활동 지역 카드 */}
-            <div className="profile-card">
-                <h3 className="profile-title">활동 지역</h3>
-                <div className="profile-info-row">
-                    <span style={{fontSize: '16px'}}>📍</span>
-                    <span>주요 거점:</span>
-                    <span style={{color: 'var(--text-main)'}}>{publicProfileUser.activityArea || '미등록'}</span>
-                </div>
-                <div className="profile-info-row">
-                    <span style={{fontSize: '16px'}}>🚗</span>
-                    <span>작업 가능:</span>
-                    <span style={{color: 'var(--text-main)'}}>{publicProfileUser.workableArea || '미등록'}</span>
-                </div>
-            </div>
-
-            {/* 4. 소개 및 전문 분야 카드 */}
-            <div className="profile-card">
-                <h3 className="profile-title">자기 소개</h3>
-                <p style={{margin: '0 0 16px 0', fontSize: '14px', color: 'var(--text-main)', lineHeight: '1.5', fontWeight: '600'}}>
-                    {publicProfileUser.intro || '작성된 소개가 없습니다.'}
-                </p>
-                <div style={{display: 'flex', flexWrap: 'wrap', gap: '6px'}}>
-                    {(publicProfileUser.keywords || []).map(k => <span key={k} style={{background: 'var(--primary-light)', color: 'var(--text-main)', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '800'}}>#{k}</span>)}
+                {/* 자기 소개 */}
+                <div style={{marginTop:'16px'}}>
+                    <p style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 8px 0', fontWeight:'600', lineHeight:'1.5'}}>{publicProfileUser.intro || '작성된 소개가 없습니다.'}</p>
+                    <div style={{display:'flex', gap:'6px', flexWrap:'wrap'}}>
+                        {(publicProfileUser.keywords || []).map(k => <span key={k} style={{background:'var(--primary-light)', color:'var(--text-main)', border:'1px solid var(--border)', padding:'4px 10px', borderRadius:'4px', fontSize:'12px', fontWeight:'800'}}>#{k}</span>)}
+                    </div>
                 </div>
             </div>
             
@@ -2209,23 +2146,6 @@ export default function App() {
           <textarea className="title-input" style={{height:'100px', resize:'none', marginBottom:'16px'}} placeholder="자유롭게 적어주세요!" value={feedbackText} onChange={(e) => setFeedbackText(e.target.value)}></textarea>
           
           <button className="sheet-btn" style={{ background: 'var(--text-main)', color: 'white', border: 'none', marginBottom:'24px' }} onClick={submitFeedback}>보내기</button>
-          
-          <div style={{textAlign:'left', borderTop:'1px solid var(--border)', paddingTop:'16px'}}>
-            <h4 style={{fontSize:'14px', color:'var(--text-main)', margin:'0 0 12px 0', fontWeight:'900'}}>내가 보낸 피드백 내역 ({myFeedbacks.length}건)</h4>
-            <div style={{maxHeight:'150px', overflowY:'auto'}}>
-              {myFeedbacks.length === 0 ? (
-                <p style={{fontSize:'13px', color:'var(--text-sub)', textAlign:'center', fontWeight:'700'}}>전송한 피드백이 없습니다.</p>
-              ) : (
-                myFeedbacks.map(fb => (
-                  <div key={fb.id} style={{background:'var(--primary-light)', padding:'10px', borderRadius:'4px', marginBottom:'8px', border:'1px solid var(--border)'}}>
-                    <div style={{fontSize:'12px', fontWeight:'900', color:'var(--text-main)'}}>[{fb.category}]</div>
-                    <div style={{fontSize:'13px', color:'var(--text-main)', marginTop:'4px', fontWeight:'600'}}>{fb.text}</div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-          
           <button className="sheet-btn cancel" onClick={() => setIsFeedbackModalOpen(false)}>닫기</button>
         </div>
       </div>
